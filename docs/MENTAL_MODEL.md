@@ -33,13 +33,15 @@ flowchart TD
 |---|---|---|---|
 | M0 | The system cannot silently escape paper mode or relax approved risk | Established in code and tests | A bypass, mutable limit, credential path, or live endpoint |
 | M1 | At least one legal venue has sufficiently reliable, structured, executable public data | Collecting evidence | Insufficient uptime, samples, rules, quotes, depth, or account eligibility |
-| M2 | One Mac can preserve state and detect failure continuously | Implemented; seven-day runtime evidence must still accrue | Duplicate writer, stale heartbeat, corrupt state, unrecoverable restart, missed schedule |
+| M2 | One Mac can preserve state and detect failure continuously | Deployed paper-only; two scheduled cycles passed, while seven-day runtime evidence must still accrue | Duplicate writer, stale heartbeat, corrupt state, unrecoverable restart, missed schedule |
 | M3 | Paper fills resemble possible real fills | Not built | Midpoint fills, ignored fees/latency/depth/settlement |
 | M4 | A signal has incremental predictive value after costs | Not established | Look-ahead, selection bias, regime dependence, or negative out-of-sample value |
 | M5-M6 | The system can improve without grading or rewriting its own safety test | Not built | Self-promotion, test weakening, leakage, or failed rollback |
 | M7 | Small live capital can be operated legally and safely | Locked | Any missing prior gate or missing fresh approval |
 
 The correct current statement is: **we have improved the quality of future learning, not proved profitability.**
+
+Snapshot on 2026-08-01: 72 immutable M1 snapshots were archived and imported, three manual M2 probes were kept outside the M2 stability count, and the first two launchd-managed M2 cycles passed. The system is healthy enough to begin M2 evidence collection, not mature enough to leave M2 or place trades.
 
 ## What changed from the previous work
 
@@ -53,6 +55,7 @@ The correct current statement is: **we have improved the quality of future learn
 | Old M1 samples could falsely inflate M2 uptime | Imported venue evidence is tagged and excluded from the M2 stability clock | One milestone cannot borrow another milestone's proof |
 | Failure mostly appeared in logs | Structured alerts and fail-closed health exist | Failure becomes machine-detectable |
 | A live database file might be copied inconsistently | SQLite online backup plus integrity check | Recovery evidence is meaningful |
+| Service installation could be mistaken for service operation | The write-once M2 clock starts inside the first launchd `service-cycle`; two planned cycles and exit codes were observed | Runtime claims now begin with actual execution |
 
 ## The two evidence clocks
 

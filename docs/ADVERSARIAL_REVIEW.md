@@ -18,13 +18,13 @@ Decision: **PASS for the paper-only baseline.** Exact approved limits and fail-c
 
 ## M1
 
-Decision: **IN PROGRESS.** The existing local collector remains the evidence producer until an approval-gated service switch. No venue winner may be selected before 168 hours, 600 samples, and every quality gate.
+Decision: **IN PROGRESS.** The old M1 service is stopped, its final evidence is archived, and M2 now continues the same venue-quality evidence chain. No venue winner may be selected before 168 hours, 600 samples, and every quality gate.
 
 ## M2 implementation review
 
 Date: 2026-08-01
 
-Decision: **PASS for implementation and a single manual probe only.** M2 is not deployed and cannot be promoted until its own 168-hour/600-cycle evidence gate passes.
+Decision: **PASS for implementation and approved paper-only deployment.** This starts M2 evidence collection; it does not promote M2, establish an edge, or authorize live trading. M2 cannot be promoted until its own 168-hour/600-cycle evidence gate passes.
 
 Verified attacks:
 
@@ -39,7 +39,7 @@ Verified attacks:
 
 Evidence:
 
-- Homebrew Python 3.11: 25 unit tests passed.
+- Homebrew Python 3.11: 31 unit tests passed after migration and evidence-clock attacks were added.
 - Python compilation, JSON parsing, plist validation, and whitespace checks passed.
 - A sandboxed network probe failed DNS resolution; the cycle persisted as `partial_failure`, created two venue alerts, marked the heartbeat degraded, and returned non-zero.
 - The approved read-only network probe then completed as `ok`, persisted one SQLite cycle and three raw compressed responses, and made health pass.
@@ -53,15 +53,15 @@ Findings closed during review:
 
 Residual gates:
 
-- Existing M1 evidence remains in the previous local runtime. Moving it or switching the LaunchAgent requires explicit approval and a reconciliation plan.
-- The new M2 database contains only manual probe evidence. The 24/7 clock has not started.
+- M2 runtime evidence has only just started: two scheduled cycles over about 15 minutes versus the required 168 hours and 600 cycles.
+- Venue validation remains below 168 hours and 600 samples, and no venue winner exists.
 - Alert delivery is stored locally only; remote notification and dashboard work remain future, separately scoped work.
 
 ## M1-to-M2 migration review
 
 Date: 2026-08-01
 
-Status: implementation verified; production cutover evidence pending.
+Status: **PASS for evidence-preserving paper-service cutover.** This is not M2 promotion.
 
 Required invariants:
 
@@ -81,3 +81,13 @@ Findings closed before cutover:
 - **Critical:** imported M1 venue samples initially could have increased the M2 runtime-stability count. Imported cycles are now explicitly tagged and excluded; the M2 clock starts once at approved cutover.
 - **High:** the archive manifest was generated but not rechecked after import. Archive integrity is now part of health, and a tampered archive blocks repeat migration.
 - **High:** starting the evidence clock before LaunchAgent bootstrap could count a failed cutover or rollback gap as uptime. Only `service-cycle` can start it; manual `cycle` probes cannot.
+
+Cutover evidence:
+
+- The old M1 LaunchAgent was stopped before the archive and remains unloaded; its original code and valid plist are preserved for rollback.
+- The final M1 source contained 72 snapshots. Source and archived `snapshots.jsonl` both have SHA-256 `f2a38ed91f519f9ce042d40d4656e185f97930330e0125976110bb541e2a1855`.
+- Archive `runtime/m2/imports/m1-f2a38ed91f519f9c` imported 72 cycles with zero duplicates. SQLite integrity returned `ok`; imported archive health passed.
+- A manual post-migration preflight produced cycle 75 while leaving `evidence_started_at` unset and the M2 runtime count at zero.
+- The M2 LaunchAgent started the write-once clock at `2026-08-01T17:14:33.332729+00:00`. Its first two planned cycles were 76 and 77, both `ok`; launchd reported `runs = 2` and `last exit code = 0`, and stderr remained empty.
+- Post-cutover status was `ok`, with 77 total venue samples but only two eligible M2 runtime cycles. `eligible_for_m2_promotion` remained false and the venue winner remained null.
+- Online backup `runtime/m2/backups/state-20260801T173034052294Z.sqlite3` completed and passed SQLite integrity validation.
