@@ -8,7 +8,7 @@
   <array>
     <string>/opt/homebrew/bin/python3.11</string>
     <string>/Users/williamniu/AI/Polymarket-trading-system-v1.2.0/m2.py</string>
-    <string>cycle</string>
+    <string>service-cycle</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/williamniu/AI/Polymarket-trading-system-v1.2.0</string>

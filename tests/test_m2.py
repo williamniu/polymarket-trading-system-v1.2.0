@@ -129,11 +129,16 @@ class M2Test(unittest.TestCase):
     def test_uncaught_collection_failure_is_persisted(self):
         with patch.object(m2.m1, "collect_snapshot", side_effect=RuntimeError("offline")):
             with redirect_stdout(StringIO()):
-                result = m2.run_cycle()
+                result = m2.run_cycle(start_evidence=True)
         self.assertEqual(result, 1)
         with m2.connect(self.db_path) as connection:
             self.assertEqual(connection.execute("SELECT status FROM cycles").fetchone()[0], "failed")
             self.assertEqual(connection.execute("SELECT code FROM alerts").fetchone()[0], "cycle_failure")
+            self.assertIsNotNone(
+                connection.execute(
+                    "SELECT value FROM meta WHERE key = 'm2_evidence_started_at'"
+                ).fetchone()
+            )
 
     def test_m1_migration_archives_imports_and_is_idempotent(self):
         source = self.m1_source([self.snapshot_at(0), self.snapshot_at(15)])
@@ -242,7 +247,7 @@ class M2Test(unittest.TestCase):
         config = json.loads((ROOT / "config" / "m2.json").read_text(encoding="utf-8"))
         self.assertEqual(plist["ProgramArguments"][0], "/opt/homebrew/bin/python3.11")
         self.assertEqual(plist["StartInterval"], config["interval_seconds"])
-        self.assertEqual(plist["ProgramArguments"][-1], "cycle")
+        self.assertEqual(plist["ProgramArguments"][-1], "service-cycle")
         self.assertTrue(plist["StandardOutPath"].endswith("runtime/m2/collector.log"))
         self.assertTrue(plist["StandardErrorPath"].endswith("runtime/m2/collector-error.log"))
         self.assertNotIn("KeepAlive", plist)

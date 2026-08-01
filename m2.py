@@ -423,15 +423,6 @@ def mark_evidence_start(connection, now=None):
     return started_at, True
 
 
-def start_evidence():
-    with writer_lock():
-        with connect() as connection:
-            init_database(connection)
-            started_at, created = mark_evidence_start(connection)
-    print(json.dumps({"evidence_started_at": started_at, "created": created}))
-    return 0
-
-
 def database_snapshots(connection):
     snapshots = []
     rows = connection.execute(
@@ -567,11 +558,13 @@ def health(connection, now=None, free_disk_mb=None):
     }
 
 
-def run_cycle():
+def run_cycle(start_evidence=False):
     started_at = utc_now()
     with writer_lock():
         with connect() as connection:
             init_database(connection, started_at)
+            if start_evidence:
+                mark_evidence_start(connection, started_at)
             try:
                 snapshot = m1.collect_snapshot(raw_dir=RAW_DIR)
                 cycle_id, status = record_snapshot(connection, snapshot, started_at)
@@ -633,7 +626,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=("init", "cycle", "status", "check", "backup", "migrate-m1", "start-evidence"),
+        choices=("init", "cycle", "service-cycle", "status", "check", "backup", "migrate-m1"),
     )
     parser.add_argument("source", nargs="?")
     arguments = parser.parse_args()
@@ -642,10 +635,10 @@ def main():
         return initialize()
     if command == "cycle":
         return run_cycle()
+    if command == "service-cycle":
+        return run_cycle(start_evidence=True)
     if command == "backup":
         return backup_database()
-    if command == "start-evidence":
-        return start_evidence()
     if command == "migrate-m1":
         if not arguments.source:
             parser.error("migrate-m1 requires the old runtime/m1 directory")

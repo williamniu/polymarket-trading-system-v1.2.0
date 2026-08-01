@@ -73,10 +73,11 @@ Required invariants:
 - imported counts plus known duplicates equal source counts;
 - imported M1 samples continue the venue-quality evidence chain;
 - imported samples and manual probes do not count toward M2's runtime-stability gate;
-- the M2 evidence clock is write-once and begins only at approved service cutover;
+- the M2 evidence clock is write-once and begins inside the first actual `service-cycle`, not a manual preflight;
 - a failed cutover reloads the old M1 LaunchAgent.
 
 Findings closed before cutover:
 
 - **Critical:** imported M1 venue samples initially could have increased the M2 runtime-stability count. Imported cycles are now explicitly tagged and excluded; the M2 clock starts once at approved cutover.
 - **High:** the archive manifest was generated but not rechecked after import. Archive integrity is now part of health, and a tampered archive blocks repeat migration.
+- **High:** starting the evidence clock before LaunchAgent bootstrap could count a failed cutover or rollback gap as uptime. Only `service-cycle` can start it; manual `cycle` probes cannot.

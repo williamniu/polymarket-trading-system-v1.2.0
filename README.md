@@ -36,9 +36,8 @@ The deterministic runtime collects evidence and enforces hard rules. An LLM may 
 /opt/homebrew/bin/python3.11 m2.py check
 /opt/homebrew/bin/python3.11 m2.py backup
 /opt/homebrew/bin/python3.11 m2.py migrate-m1 /path/to/old/runtime/m1
-/opt/homebrew/bin/python3.11 m2.py start-evidence
 ```
 
-Runtime files are written under ignored `runtime/`. Installing or switching a LaunchAgent is a separate approval-gated operation.
+Runtime files are written under ignored `runtime/`. The LaunchAgent uses `service-cycle`, which starts the write-once M2 evidence clock only when the service actually executes. Installing or switching a LaunchAgent is a separate approval-gated operation.
 
 See `docs/MENTAL_MODEL.md` for the project knowledge graph and the distinction between inherited M1 venue evidence and the new M2 runtime-stability clock.
