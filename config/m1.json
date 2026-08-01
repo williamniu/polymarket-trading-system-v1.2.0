@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "duration_hours": 168,
+  "interval_seconds": 900,
+  "minimum_samples": 600,
+  "request_timeout_seconds": 20,
+  "maximum_pages": 20,
+  "market_sample_limit": 5000,
+  "book_sample_size": 25,
+  "quality_gates": {
+    "minimum_success_rate": 0.95,
+    "minimum_quote_coverage": 0.25,
+    "minimum_rules_coverage": 0.8,
+    "minimum_median_top_quote_notional": 10.0
+  }
+}

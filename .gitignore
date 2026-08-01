@@ -1,0 +1,15 @@
+# Source belongs in Git; runtime state and secrets do not.
+.DS_Store
+.env
+.env.*
+.venv/
+__pycache__/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+*.pid
+runtime/
+

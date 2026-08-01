@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "interval_seconds": 900,
+  "stale_after_seconds": 1800,
+  "minimum_free_disk_mb": 1024,
+  "evidence_duration_hours": 168,
+  "minimum_cycles": 600
+}
+

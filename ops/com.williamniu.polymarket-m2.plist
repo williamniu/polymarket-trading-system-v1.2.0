@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.williamniu.polymarket-m2</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3.11</string>
+    <string>/Users/williamniu/AI/Polymarket-trading-system-v1.2.0/m2.py</string>
+    <string>cycle</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/williamniu/AI/Polymarket-trading-system-v1.2.0</string>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>

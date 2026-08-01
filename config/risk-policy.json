@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "currency": "USD",
+  "mode": "paper",
+  "limits_pct": {
+    "max_loss_per_trade": 2.0,
+    "max_event_risk": 5.0,
+    "max_theme_risk": 10.0,
+    "max_total_worst_case_loss": 20.0,
+    "daily_hard_stop": 5.0,
+    "rolling_3d_hard_stop": 10.0,
+    "high_watermark_drawdown_freeze": 20.0
+  },
+  "measurement": {
+    "position_limits_basis": "current_equity",
+    "daily_loss_basis": "start_of_day_equity",
+    "rolling_3d_loss_basis": "start_of_window_equity",
+    "drawdown_basis": "equity_high_watermark",
+    "include_realized_and_unrealized_pnl": true,
+    "include_open_orders_in_worst_case_loss": true,
+    "include_fees_and_slippage_in_worst_case_loss": true,
+    "aggregate_correlated_positions": true
+  },
+  "accounts": {
+    "paper": {
+      "starting_capital": 5000.0
+    },
+    "live_tier_1": {
+      "capital_min": 200.0,
+      "capital_max": 300.0
+    }
+  },
+  "controls": {
+    "live_trading_enabled": false,
+    "live_requires_fresh_user_approval": true,
+    "withdrawal_automation_enabled": false,
+    "risk_limits_self_modifiable": false,
+    "credentials_visible_to_llm": false,
+    "freeze_requires_user_unlock": true,
+    "fail_closed_on_missing_or_stale_state": true
+  },
+  "strategy_constraints": {
+    "market_making_as_primary_edge": false,
+    "latency_arbitrage": false,
+    "maker_rebate_capture": false,
+    "passive_limit_orders_for_signal_execution": true
+  }
+}
