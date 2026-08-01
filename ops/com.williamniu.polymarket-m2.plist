@@ -16,5 +16,9 @@
   <integer>900</integer>
   <key>RunAtLoad</key>
   <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/williamniu/AI/Polymarket-trading-system-v1.2.0/runtime/m2/collector.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/williamniu/AI/Polymarket-trading-system-v1.2.0/runtime/m2/collector-error.log</string>
 </dict>
 </plist>

@@ -4,6 +4,7 @@
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ RUNTIME = ROOT / "runtime" / "m2"
 DB_PATH = RUNTIME / "state.sqlite3"
 LOCK_PATH = RUNTIME / "writer.lock"
 BACKUP_DIR = RUNTIME / "backups"
+IMPORT_DIR = RUNTIME / "imports"
 RAW_DIR = RUNTIME / "raw"
 CONFIG_PATH = ROOT / "config" / "m2.json"
 RISK_PATH = ROOT / "config" / "risk-policy.json"
@@ -67,6 +69,19 @@ CREATE TABLE IF NOT EXISTS alerts (
     severity TEXT NOT NULL CHECK (severity IN ('warning', 'high', 'critical')),
     code TEXT NOT NULL,
     message TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS evidence_imports (
+    import_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_sha256 TEXT NOT NULL UNIQUE,
+    archive_path TEXT NOT NULL,
+    source_snapshot_count INTEGER NOT NULL CHECK (source_snapshot_count >= 0),
+    imported_snapshot_count INTEGER NOT NULL CHECK (imported_snapshot_count >= 0),
+    duplicate_snapshot_count INTEGER NOT NULL CHECK (duplicate_snapshot_count >= 0),
+    imported_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS imported_cycles (
+    cycle_id INTEGER PRIMARY KEY REFERENCES cycles(cycle_id) ON DELETE CASCADE,
+    source_sha256 TEXT NOT NULL
 );
 """
 
@@ -132,39 +147,60 @@ def init_database(connection, now=None, policy_path=RISK_PATH):
         )
 
 
-def record_snapshot(connection, snapshot, started_at, finished_at=None, free_disk_mb=None):
-    finished_at = finished_at or utc_now()
-    snapshot_at = snapshot["collected_at"]
+def validate_snapshot(snapshot):
+    if not isinstance(snapshot, dict):
+        raise ValueError("snapshot must be an object")
+    try:
+        observed_at = datetime.fromisoformat(snapshot["collected_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("snapshot has an invalid collected_at") from exc
+    if observed_at.tzinfo is None:
+        raise ValueError("snapshot collected_at must include a timezone")
     venues = snapshot.get("venues")
     if not isinstance(venues, dict):
         raise ValueError("snapshot venues must be an object")
     missing = [venue for venue in REQUIRED_VENUES if venue not in venues]
     if missing:
         raise ValueError(f"snapshot missing required venues: {', '.join(missing)}")
+    return observed_at, venues
+
+
+def insert_snapshot(
+    connection,
+    snapshot,
+    started_at,
+    finished_at,
+    free_disk_mb=None,
+    update_heartbeat=True,
+    check_disk=True,
+):
+    finished_at = finished_at or utc_now()
+    snapshot_at = snapshot["collected_at"]
+    _, venues = validate_snapshot(snapshot)
     failures = [venue for venue in REQUIRED_VENUES if not venues[venue].get("ok")]
     config = load_json(CONFIG_PATH)
     if free_disk_mb is None:
         free_disk_mb = shutil.disk_usage(ROOT).free / (1024 * 1024)
-    disk_low = free_disk_mb < config["minimum_free_disk_mb"]
+    disk_low = check_disk and free_disk_mb < config["minimum_free_disk_mb"]
     status = "partial_failure" if failures or disk_low else "ok"
 
-    with connection:
-        cursor = connection.execute(
+    cursor = connection.execute(
+        """
+        INSERT INTO cycles(snapshot_at, started_at, finished_at, status)
+        VALUES (?, ?, ?, ?)
+        """,
+        (snapshot_at, started_at.isoformat(), finished_at.isoformat(), status),
+    )
+    cycle_id = cursor.lastrowid
+    for venue, metrics in venues.items():
+        connection.execute(
             """
-            INSERT INTO cycles(snapshot_at, started_at, finished_at, status)
+            INSERT INTO venue_snapshots(cycle_id, venue, ok, metrics_json)
             VALUES (?, ?, ?, ?)
             """,
-            (snapshot_at, started_at.isoformat(), finished_at.isoformat(), status),
+            (cycle_id, venue, int(bool(metrics.get("ok"))), json.dumps(metrics, sort_keys=True)),
         )
-        cycle_id = cursor.lastrowid
-        for venue, metrics in venues.items():
-            connection.execute(
-                """
-                INSERT INTO venue_snapshots(cycle_id, venue, ok, metrics_json)
-                VALUES (?, ?, ?, ?)
-                """,
-                (cycle_id, venue, int(bool(metrics.get("ok"))), json.dumps(metrics, sort_keys=True)),
-            )
+    if update_heartbeat:
         heartbeat_status = "degraded" if failures or disk_low else "ok"
         details = []
         if failures:
@@ -183,23 +219,237 @@ def record_snapshot(connection, snapshot, started_at, finished_at=None, free_dis
             """,
             (finished_at.isoformat(), heartbeat_status, detail),
         )
-        for venue in failures:
-            connection.execute(
-                """
-                INSERT INTO alerts(cycle_id, created_at, severity, code, message)
-                VALUES (?, ?, 'high', 'venue_failure', ?)
-                """,
-                (cycle_id, finished_at.isoformat(), f"{venue} collection failed"),
-            )
-        if disk_low:
-            connection.execute(
-                """
-                INSERT INTO alerts(cycle_id, created_at, severity, code, message)
-                VALUES (?, ?, 'critical', 'low_disk', ?)
-                """,
-                (cycle_id, finished_at.isoformat(), f"free disk is {free_disk_mb:.1f} MB"),
-            )
+    for venue in failures:
+        connection.execute(
+            """
+            INSERT INTO alerts(cycle_id, created_at, severity, code, message)
+            VALUES (?, ?, 'high', 'venue_failure', ?)
+            """,
+            (cycle_id, finished_at.isoformat(), f"{venue} collection failed"),
+        )
+    if disk_low:
+        connection.execute(
+            """
+            INSERT INTO alerts(cycle_id, created_at, severity, code, message)
+            VALUES (?, ?, 'critical', 'low_disk', ?)
+            """,
+            (cycle_id, finished_at.isoformat(), f"free disk is {free_disk_mb:.1f} MB"),
+        )
     return cycle_id, status
+
+
+def record_snapshot(connection, snapshot, started_at, finished_at=None, free_disk_mb=None):
+    finished_at = finished_at or utc_now()
+    with connection:
+        return insert_snapshot(
+            connection,
+            snapshot,
+            started_at,
+            finished_at,
+            free_disk_mb=free_disk_mb,
+        )
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_manifest(root):
+    return {
+        str(path.relative_to(root)): {"bytes": path.stat().st_size, "sha256": sha256_file(path)}
+        for path in sorted(item for item in root.rglob("*") if item.is_file())
+    }
+
+
+def verify_archive(path):
+    manifest_path = path / "manifest.json"
+    if not manifest_path.is_file() or any(item.is_symlink() for item in path.rglob("*")):
+        return False
+    expected = load_json(manifest_path)
+    actual = file_manifest(path)
+    actual.pop("manifest.json", None)
+    return actual == expected
+
+
+def read_m1_snapshots(path):
+    snapshots, previous = [], None
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        try:
+            snapshot = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"corrupt M1 snapshot line {line_number}") from exc
+        observed_at, _ = validate_snapshot(snapshot)
+        if previous is not None and observed_at <= previous:
+            raise ValueError(f"M1 snapshot timestamps are not strictly increasing at line {line_number}")
+        snapshots.append(snapshot)
+        previous = observed_at
+    if not snapshots:
+        raise ValueError("M1 snapshot log is empty")
+    return snapshots
+
+
+def archive_m1(source_dir):
+    source_dir = source_dir.resolve()
+    snapshots_path = source_dir / "snapshots.jsonl"
+    if not snapshots_path.is_file():
+        raise ValueError("M1 source has no snapshots.jsonl")
+    if any(path.is_symlink() for path in source_dir.rglob("*")):
+        raise ValueError("M1 source may not contain symlinks")
+    source_manifest = file_manifest(source_dir)
+    source_sha256 = source_manifest["snapshots.jsonl"]["sha256"]
+    archive_name = f"m1-{source_sha256[:16]}"
+    destination = IMPORT_DIR / archive_name
+    if destination.exists():
+        if not verify_archive(destination):
+            raise RuntimeError("existing M1 archive failed integrity check")
+        if load_json(destination / "manifest.json") != source_manifest:
+            raise RuntimeError("existing M1 archive digest mismatch")
+        return destination, source_sha256
+
+    temporary = IMPORT_DIR / f".{archive_name}.tmp"
+    if temporary.exists():
+        raise RuntimeError(f"incomplete M1 archive already exists: {temporary}")
+    IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, temporary, copy_function=shutil.copy2)
+    copied_manifest = file_manifest(temporary)
+    if copied_manifest != source_manifest or file_manifest(source_dir) != source_manifest:
+        raise RuntimeError("M1 source changed during archive")
+    manifest_path = temporary / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(copied_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    os.replace(temporary, destination)
+    return destination, source_sha256
+
+
+def migrate_m1(source_dir):
+    imported_at = utc_now()
+    with writer_lock():
+        with connect() as connection:
+            init_database(connection, imported_at)
+            source_path = Path(source_dir).resolve()
+            snapshots_path = source_path / "snapshots.jsonl"
+            if not snapshots_path.is_file():
+                raise ValueError("M1 source has no snapshots.jsonl")
+            source_sha256 = sha256_file(snapshots_path)
+            existing = connection.execute(
+                "SELECT * FROM evidence_imports WHERE source_sha256 = ?", (source_sha256,)
+            ).fetchone()
+            if existing:
+                if not verify_archive(Path(existing["archive_path"])):
+                    raise RuntimeError("imported M1 archive failed integrity check")
+                result = {"status": "already_imported", **dict(existing)}
+                print(json.dumps(result, indent=2, sort_keys=True))
+                return 0
+
+            archive_path, archived_sha256 = archive_m1(source_path)
+            if archived_sha256 != source_sha256:
+                raise RuntimeError("archived M1 digest mismatch")
+            snapshots = read_m1_snapshots(archive_path / "snapshots.jsonl")
+            imported, duplicates = 0, 0
+            with connection:
+                for snapshot in snapshots:
+                    if connection.execute(
+                        "SELECT 1 FROM cycles WHERE snapshot_at = ?", (snapshot["collected_at"],)
+                    ).fetchone():
+                        duplicates += 1
+                        continue
+                    observed_at, _ = validate_snapshot(snapshot)
+                    cycle_id, _ = insert_snapshot(
+                        connection,
+                        snapshot,
+                        observed_at,
+                        observed_at,
+                        update_heartbeat=False,
+                        check_disk=False,
+                    )
+                    connection.execute(
+                        "INSERT INTO imported_cycles(cycle_id, source_sha256) VALUES (?, ?)",
+                        (cycle_id, source_sha256),
+                    )
+                    imported += 1
+                connection.execute(
+                    """
+                    INSERT INTO evidence_imports(
+                        source_sha256, archive_path, source_snapshot_count,
+                        imported_snapshot_count, duplicate_snapshot_count, imported_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        source_sha256,
+                        str(archive_path),
+                        len(snapshots),
+                        imported,
+                        duplicates,
+                        imported_at.isoformat(),
+                    ),
+                )
+            if imported + duplicates != len(snapshots):
+                raise RuntimeError("M1 import reconciliation failed")
+            if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise RuntimeError("database integrity failed after M1 import")
+    print(
+        json.dumps(
+            {
+                "status": "imported",
+                "source_sha256": source_sha256,
+                "archive_path": str(archive_path),
+                "source_snapshot_count": len(snapshots),
+                "imported_snapshot_count": imported,
+                "duplicate_snapshot_count": duplicates,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def mark_evidence_start(connection, now=None):
+    started_at = (now or utc_now()).isoformat()
+    with connection:
+        existing = connection.execute(
+            "SELECT value FROM meta WHERE key = 'm2_evidence_started_at'"
+        ).fetchone()
+        if existing:
+            return existing["value"], False
+        connection.execute(
+            "INSERT INTO meta(key, value) VALUES ('m2_evidence_started_at', ?)", (started_at,)
+        )
+    return started_at, True
+
+
+def start_evidence():
+    with writer_lock():
+        with connect() as connection:
+            init_database(connection)
+            started_at, created = mark_evidence_start(connection)
+    print(json.dumps({"evidence_started_at": started_at, "created": created}))
+    return 0
+
+
+def database_snapshots(connection):
+    snapshots = []
+    rows = connection.execute(
+        """
+        SELECT c.cycle_id, c.snapshot_at, v.venue, v.metrics_json
+        FROM cycles AS c
+        JOIN venue_snapshots AS v ON v.cycle_id = c.cycle_id
+        ORDER BY c.snapshot_at, c.cycle_id, v.venue
+        """
+    ).fetchall()
+    current_id, current = None, None
+    for row in rows:
+        if row["cycle_id"] != current_id:
+            current = {"collected_at": row["snapshot_at"], "venues": {}}
+            snapshots.append(current)
+            current_id = row["cycle_id"]
+        current["venues"][row["venue"]] = json.loads(row["metrics_json"])
+    return snapshots
 
 
 def record_failed_cycle(connection, started_at, message, finished_at=None):
@@ -263,17 +513,41 @@ def health(connection, now=None, free_disk_mb=None):
         free_disk_mb = shutil.disk_usage(ROOT).free / (1024 * 1024)
     checks["disk"] = free_disk_mb >= config["minimum_free_disk_mb"]
 
+    total_cycle_count = 0
     cycle_count = 0
     elapsed_hours = 0.0
+    evidence_started_at = None
     if checks["database"]:
-        row = connection.execute(
-            "SELECT COUNT(*) AS count, MIN(started_at) AS first, MAX(finished_at) AS last FROM cycles"
+        total_cycle_count = connection.execute("SELECT COUNT(*) FROM cycles").fetchone()[0]
+        evidence = connection.execute(
+            "SELECT value FROM meta WHERE key = 'm2_evidence_started_at'"
         ).fetchone()
-        cycle_count = row["count"]
-        if row["first"] and row["last"]:
-            first = datetime.fromisoformat(row["first"])
+        evidence_started_at = evidence["value"] if evidence else None
+        if evidence_started_at:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count, MAX(finished_at) AS last
+                FROM cycles
+                WHERE started_at >= ?
+                  AND cycle_id NOT IN (SELECT cycle_id FROM imported_cycles)
+                """,
+                (evidence_started_at,),
+            ).fetchone()
+            cycle_count = row["count"]
+        else:
+            row = None
+        if row and row["last"]:
+            first = datetime.fromisoformat(evidence_started_at)
             last = datetime.fromisoformat(row["last"])
             elapsed_hours = max(0.0, (last - first).total_seconds() / 3600)
+        try:
+            archives = connection.execute("SELECT archive_path FROM evidence_imports").fetchall()
+            checks["imported_archives"] = all(
+                verify_archive(Path(archive["archive_path"])) for archive in archives
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            checks["imported_archives"] = False
+    checks["evidence_started"] = evidence_started_at is not None
     healthy = all(checks.values())
     promotion_ready = (
         healthy
@@ -286,7 +560,9 @@ def health(connection, now=None, free_disk_mb=None):
         "heartbeat_age_seconds": age_seconds,
         "free_disk_mb": round(free_disk_mb, 1),
         "cycle_count": cycle_count,
+        "total_cycle_count": total_cycle_count,
         "elapsed_hours": round(elapsed_hours, 3),
+        "evidence_started_at": evidence_started_at,
         "eligible_for_m2_promotion": promotion_ready,
     }
 
@@ -323,6 +599,9 @@ def show_status(check_only=False):
         try:
             with connect() as connection:
                 result = health(connection)
+                result["venue_validation"] = m1.build_report(
+                    database_snapshots(connection), m1.load_config()
+                )
         except (OSError, sqlite3.DatabaseError, ValueError) as exc:
             result = {
                 "status": "unhealthy",
@@ -352,14 +631,25 @@ def backup_database():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "cycle", "status", "check", "backup"))
-    command = parser.parse_args().command
+    parser.add_argument(
+        "command",
+        choices=("init", "cycle", "status", "check", "backup", "migrate-m1", "start-evidence"),
+    )
+    parser.add_argument("source", nargs="?")
+    arguments = parser.parse_args()
+    command = arguments.command
     if command == "init":
         return initialize()
     if command == "cycle":
         return run_cycle()
     if command == "backup":
         return backup_database()
+    if command == "start-evidence":
+        return start_evidence()
+    if command == "migrate-m1":
+        if not arguments.source:
+            parser.error("migrate-m1 requires the old runtime/m1 directory")
+        return migrate_m1(arguments.source)
     return show_status(check_only=command == "check")
 
 

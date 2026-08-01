@@ -56,3 +56,27 @@ Residual gates:
 - Existing M1 evidence remains in the previous local runtime. Moving it or switching the LaunchAgent requires explicit approval and a reconciliation plan.
 - The new M2 database contains only manual probe evidence. The 24/7 clock has not started.
 - Alert delivery is stored locally only; remote notification and dashboard work remain future, separately scoped work.
+
+## M1-to-M2 migration review
+
+Date: 2026-08-01
+
+Status: implementation verified; production cutover evidence pending.
+
+Required invariants:
+
+- the old service is stopped before the final archive;
+- every archived file has a size and SHA-256 digest;
+- source and copied manifests match before the archive is accepted;
+- malformed or reordered snapshots import no cycle rows;
+- repeated import is idempotent;
+- imported counts plus known duplicates equal source counts;
+- imported M1 samples continue the venue-quality evidence chain;
+- imported samples and manual probes do not count toward M2's runtime-stability gate;
+- the M2 evidence clock is write-once and begins only at approved service cutover;
+- a failed cutover reloads the old M1 LaunchAgent.
+
+Findings closed before cutover:
+
+- **Critical:** imported M1 venue samples initially could have increased the M2 runtime-stability count. Imported cycles are now explicitly tagged and excluded; the M2 clock starts once at approved cutover.
+- **High:** the archive manifest was generated but not rechecked after import. Archive integrity is now part of health, and a tampered archive blocks repeat migration.

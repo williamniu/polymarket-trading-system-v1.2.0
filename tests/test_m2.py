@@ -22,10 +22,12 @@ class M2Test(unittest.TestCase):
         self.db_path = self.root / "state.sqlite3"
         self.lock_path = self.root / "writer.lock"
         self.backup_dir = self.root / "backups"
+        self.import_dir = self.root / "imports"
         self.patches = [
             patch.object(m2, "DB_PATH", self.db_path),
             patch.object(m2, "LOCK_PATH", self.lock_path),
             patch.object(m2, "BACKUP_DIR", self.backup_dir),
+            patch.object(m2, "IMPORT_DIR", self.import_dir),
             patch.object(m2, "RAW_DIR", self.root / "raw"),
         ]
         for item in self.patches:
@@ -129,9 +131,100 @@ class M2Test(unittest.TestCase):
             with redirect_stdout(StringIO()):
                 result = m2.run_cycle()
         self.assertEqual(result, 1)
-        with sqlite3.connect(self.db_path) as connection:
+        with m2.connect(self.db_path) as connection:
             self.assertEqual(connection.execute("SELECT status FROM cycles").fetchone()[0], "failed")
             self.assertEqual(connection.execute("SELECT code FROM alerts").fetchone()[0], "cycle_failure")
+
+    def test_m1_migration_archives_imports_and_is_idempotent(self):
+        source = self.m1_source([self.snapshot_at(0), self.snapshot_at(15)])
+        with redirect_stdout(StringIO()):
+            self.assertEqual(m2.migrate_m1(source), 0)
+            self.assertEqual(m2.migrate_m1(source), 0)
+        with m2.connect(self.db_path) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM cycles").fetchone()[0], 2)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM evidence_imports").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM imported_cycles").fetchone()[0], 2)
+            imported = connection.execute(
+                "SELECT source_snapshot_count, imported_snapshot_count, duplicate_snapshot_count "
+                "FROM evidence_imports"
+            ).fetchone()
+            self.assertEqual(tuple(imported), (2, 2, 0))
+            self.assertIsNone(connection.execute("SELECT * FROM heartbeats").fetchone())
+            health = m2.health(connection, free_disk_mb=5000)
+            self.assertEqual(health["total_cycle_count"], 2)
+            self.assertEqual(health["cycle_count"], 0)
+            self.assertFalse(health["eligible_for_m2_promotion"])
+            self.assertEqual(len(m2.database_snapshots(connection)), 2)
+        archives = [path for path in self.import_dir.iterdir() if not path.name.startswith(".")]
+        self.assertEqual(len(archives), 1)
+        manifest = json.loads((archives[0] / "manifest.json").read_text(encoding="utf-8"))
+        self.assertIn("snapshots.jsonl", manifest)
+        self.assertIn("raw/sample.json", manifest)
+
+    def test_m1_migration_reconciles_existing_snapshot_as_duplicate(self):
+        snapshots = [self.snapshot_at(0), self.snapshot_at(15)]
+        source = self.m1_source(snapshots)
+        observed = datetime.fromisoformat(snapshots[0]["collected_at"])
+        with self.connection() as connection:
+            m2.record_snapshot(connection, snapshots[0], observed, observed, free_disk_mb=5000)
+        with redirect_stdout(StringIO()):
+            m2.migrate_m1(source)
+        with sqlite3.connect(self.db_path) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM cycles").fetchone()[0], 2)
+            imported = connection.execute(
+                "SELECT imported_snapshot_count, duplicate_snapshot_count FROM evidence_imports"
+            ).fetchone()
+        self.assertEqual(imported, (1, 1))
+
+    def test_tampered_m1_archive_fails_health_and_repeat_import(self):
+        source = self.m1_source([self.snapshot_at(0)])
+        with redirect_stdout(StringIO()):
+            m2.migrate_m1(source)
+        archive = next(path for path in self.import_dir.iterdir() if not path.name.startswith("."))
+        (archive / "raw" / "sample.json").write_text("tampered\n", encoding="utf-8")
+        with m2.connect(self.db_path) as connection:
+            health = m2.health(connection, free_disk_mb=5000)
+        self.assertFalse(health["checks"]["imported_archives"])
+        with redirect_stdout(StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "archive failed integrity"):
+                m2.migrate_m1(source)
+
+    def test_malformed_m1_log_rolls_back_all_snapshot_rows(self):
+        source = self.m1_source([self.snapshot_at(0)])
+        with (source / "snapshots.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write("{not-json}\n")
+        with redirect_stdout(StringIO()):
+            with self.assertRaisesRegex(ValueError, "corrupt M1 snapshot line 2"):
+                m2.migrate_m1(source)
+        with sqlite3.connect(self.db_path) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM cycles").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM evidence_imports").fetchone()[0], 0)
+
+    def test_reordered_m1_timestamps_fail_closed(self):
+        source = self.m1_source([self.snapshot_at(15), self.snapshot_at(0)])
+        with self.assertRaisesRegex(ValueError, "not strictly increasing"):
+            m2.read_m1_snapshots(source / "snapshots.jsonl")
+
+    def test_m2_evidence_clock_starts_once_and_excludes_earlier_cycles(self):
+        before = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        started = before + timedelta(hours=1)
+        after = started + timedelta(minutes=15)
+        with self.connection() as connection:
+            m2.record_snapshot(connection, self.snapshot(before), before, before, free_disk_mb=5000)
+            evidence_at, created = m2.mark_evidence_start(connection, started)
+            repeated_at, repeated_created = m2.mark_evidence_start(
+                connection, started + timedelta(days=1)
+            )
+            m2.record_snapshot(connection, self.snapshot(after), after, after, free_disk_mb=5000)
+            health = m2.health(connection, now=after, free_disk_mb=5000)
+        self.assertTrue(created)
+        self.assertFalse(repeated_created)
+        self.assertEqual(repeated_at, evidence_at)
+        self.assertEqual(health["status"], "ok")
+        self.assertEqual(health["total_cycle_count"], 2)
+        self.assertEqual(health["cycle_count"], 1)
+        self.assertEqual(health["elapsed_hours"], 0.25)
+        self.assertFalse(health["eligible_for_m2_promotion"])
 
     def test_backup_is_consistent(self):
         with self.connection():
@@ -150,6 +243,8 @@ class M2Test(unittest.TestCase):
         self.assertEqual(plist["ProgramArguments"][0], "/opt/homebrew/bin/python3.11")
         self.assertEqual(plist["StartInterval"], config["interval_seconds"])
         self.assertEqual(plist["ProgramArguments"][-1], "cycle")
+        self.assertTrue(plist["StandardOutPath"].endswith("runtime/m2/collector.log"))
+        self.assertTrue(plist["StandardErrorPath"].endswith("runtime/m2/collector-error.log"))
         self.assertNotIn("KeepAlive", plist)
 
     @staticmethod
@@ -162,6 +257,19 @@ class M2Test(unittest.TestCase):
                 "kalshi_demo_probe": {"ok": True, "market_count": 1},
             },
         }
+
+    def snapshot_at(self, minutes):
+        return self.snapshot(datetime(2026, 8, 1, tzinfo=timezone.utc) + timedelta(minutes=minutes))
+
+    def m1_source(self, snapshots):
+        source = self.root / "m1-source"
+        raw = source / "raw"
+        raw.mkdir(parents=True)
+        (source / "snapshots.jsonl").write_text(
+            "".join(json.dumps(snapshot) + "\n" for snapshot in snapshots), encoding="utf-8"
+        )
+        (raw / "sample.json").write_text("{}\n", encoding="utf-8")
+        return source
 
 
 if __name__ == "__main__":
