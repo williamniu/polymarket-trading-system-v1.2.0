@@ -55,6 +55,20 @@ Milestones may be implemented in parallel, but none may be promoted by bypassing
 - No order-capable or credential-bearing code exists.
 - Seven days and 600 cycles are required before M2 promotion.
 
+## M3 acceptance criteria
+
+- Every order records the user-approved configuration version, decision time, latency, instrument metadata, and source evidence hash.
+- The first eligible post-latency book is used; later books cannot be selected for a better result.
+- Fills use executable prices and haircutted displayed depth, never midpoint or unlimited size.
+- Resting orders require trade-through after queue-ahead; a touched price alone is not a fill.
+- Published venue fees and rounding are versioned facts; rebates are not primary alpha.
+- Event and theme classifications come from sealed instrument evidence, not strategy input alone.
+- Cash, positions, fees, settlement and executable liquidation equity reconcile after every mutation.
+- M0 per-trade, event, theme, total, daily, rolling and drawdown controls remain authoritative.
+- Unsupported scalar, sub-cent, complex collateral, stale, halted or incomplete evidence fails closed.
+- M3 stays offline until its schema and service integration receive a separate approval.
+- Seven days, 600 paper intents and zero reconciliation errors are required before M3 promotion.
+
 ## Change control
 
 Critical changes require user approval before execution:
@@ -66,5 +80,6 @@ Critical changes require user approval before execution:
 - publishing secrets or runtime data;
 - weakening a test, alert, fail-closed condition, or adversarial gate.
 
-Source changes should remain small, use the Python standard library when sufficient, and leave one runnable check for non-trivial logic.
+Every milestone must also show the user-editable controls, the recommended values, consequences, evidence-reset scope, and required approval. Prospective policy changes are versioned; historical evidence is never rewritten.
 
+Source changes should remain small, use the Python standard library when sufficient, and leave one runnable check for non-trivial logic.

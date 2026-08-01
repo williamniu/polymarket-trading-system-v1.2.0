@@ -91,3 +91,46 @@ Cutover evidence:
 - The M2 LaunchAgent started the write-once clock at `2026-08-01T17:14:33.332729+00:00`. Its first two planned cycles were 76 and 77, both `ok`; launchd reported `runs = 2` and `last exit code = 0`, and stderr remained empty.
 - Post-cutover status was `ok`, with 77 total venue samples but only two eligible M2 runtime cycles. `eligible_for_m2_promotion` remained false and the venue winner remained null.
 - Online backup `runtime/m2/backups/state-20260801T173034052294Z.sqlite3` completed and passed SQLite integrity validation.
+
+## M3 offline execution review
+
+Date: 2026-08-01
+
+Decision: **PASS for offline M3.0-M3.4 only.** The engine is not connected to the active SQLite database or LaunchAgent, has no credentials or network order path, and has no M3 runtime evidence. This is not M3 deployment or promotion.
+
+Verified attacks:
+
+- a later favorable book cannot replace the first post-latency book;
+- stale, halted, reordered, crossed, off-tick or hash-tampered books fail closed;
+- observed depth is haircutted and fills never use midpoint or exceed credited size;
+- YES/NO complement conversion is checked for both venue formats;
+- resting touch does not fill ahead of displayed queue; incomplete trade evidence remains `unverified`;
+- venue fee coefficients, roles and rounding are recalculated before ledger entry;
+- a strategy cannot spoof event, theme, tick size or fee-rule identity against sealed book metadata;
+- duplicate orders, oversells, risk-limit breaches, duplicate settlements and cash tampering fail;
+- executable liquidation marks include depth and exit fees, and can trigger the M0 loss freeze;
+- scalar, non-final or unknown-venue settlement fails closed.
+
+Evidence:
+
+- Homebrew Python 3.11: 54 repository tests passed, including 23 M3 adversarial tests.
+- Python compilation, JSON configuration, whitespace and the isolated `m3.py check` passed.
+- The offline check initializes a temporary $5,000 paper account and reconciles cash and equity exactly.
+- Source inventory contains no credential loading, authenticated request, order submission or active-service change.
+
+Findings closed during review:
+
+- **High:** execution and reconciliation status initially shared one field name. They are now separate, so an `ok` ledger cannot hide a partial order.
+- **High:** order-supplied event, theme and tick metadata could split correlated exposure or bypass price increments. Matching now requires the order to equal sealed instrument metadata.
+- **High:** a sealed result could originally reach the ledger without recalculating fill totals and fees. The ledger now revalidates quantity, price, time, status, reservation and official fee math.
+- **High:** only realized cash changes initially reached M0 stops. Executable liquidation marking, equity history and daily/rolling/high-watermark freezing now include unrealized risk.
+- **High:** latency, queue and fee-stress knobs could be configured optimistically. The approved processing-buffer floor, queue floor, fee floor and exact venue-rule IDs now fail closed.
+- **High:** fragmented fill fees could exceed the single-fill preflight estimate. Actual simulated cost is now also a floor for preflight risk.
+
+Residual gates before M3.5:
+
+- Instrument event/theme/tick/fee metadata must be derived from official market data, not caller text.
+- Venue-specific point-orderbook latency must be measured before p95 plus 250 ms can be enforced automatically.
+- Polymarket US resting fills cannot be verified from current public REST evidence alone; missing trade tape must remain `unverified` unless separately approved read-only access is added.
+- Sub-cent, fractional, scalar, combo, leverage and complex collateral products remain unsupported and fail closed.
+- The active database has no M3 tables, the running service imports no M3 code, and the M3 168-hour/600-intent clock has not started.

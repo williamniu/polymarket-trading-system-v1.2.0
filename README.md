@@ -7,6 +7,7 @@ A paper-only research system designed to become more reliable through measured f
 - **M1 venue validation is still collecting evidence through M2.** No venue has passed the 168-hour/600-sample gate.
 - **M2 paper infrastructure is deployed.** Its evidence clock started at `2026-08-01T17:14:33Z`; the first two launchd-managed cycles passed, but the separate 168-hour/600-cycle promotion gate remains locked.
 - M2 uses one SQLite source of truth, heartbeats, health checks, alerts, backups, evidence migration, and a $5,000 simulated account baseline.
+- **M3 is offline only.** A deterministic execution, fee, risk, settlement, and reconciliation engine exists, but it is not connected to the active database, service, credentials, or any order endpoint.
 - There is no credential loading, signing, order submission, deposit, withdrawal, or live-trading code.
 - Market making, latency arbitrage, and maker-rebate capture are prohibited as primary alpha sources.
 
@@ -18,7 +19,7 @@ The deterministic runtime collects evidence and enforces hard rules. An LLM may 
 
 ```bash
 /opt/homebrew/bin/python3.11 -m unittest discover -s tests -v
-/opt/homebrew/bin/python3.11 -m py_compile m1.py m2.py tests/test_*.py
+/opt/homebrew/bin/python3.11 -m py_compile m1.py m2.py m3.py tests/test_*.py
 ```
 
 ## M1 read-only commands
@@ -42,3 +43,11 @@ The deterministic runtime collects evidence and enforces hard rules. An LLM may 
 Runtime files are written under ignored `runtime/`. The LaunchAgent uses `service-cycle`, which starts the write-once M2 evidence clock only when the service actually executes. The approved M1-to-M2 service switch completed on 2026-08-01; future operational or live-capital changes remain separately approval-gated.
 
 See `docs/MENTAL_MODEL.md` for the project knowledge graph and the distinction between inherited M1 venue evidence and the new M2 runtime-stability clock.
+
+## M3 offline command
+
+```bash
+/opt/homebrew/bin/python3.11 m3.py check
+```
+
+See `docs/USER_DECISIONS.md` for the user-editable control surface. M3 must receive a second approval before it can migrate the active SQLite schema or join `service-cycle`.
