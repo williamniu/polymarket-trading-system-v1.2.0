@@ -417,6 +417,27 @@ class M3Test(unittest.TestCase):
         with self.assertRaisesRegex(m3.EvidenceError, "identity"):
             m3.record_settlement(self.connection, wrong_venue, self.config)
 
+    def test_settlement_source_identity_must_match_the_position_market(self):
+        source = m3.seal(
+            {
+                "venue": "kalshi",
+                "market_id": "KX-WRONG",
+                "observed_at": self.now.isoformat(),
+                "payload": {"result": "yes"},
+            }
+        )
+        settlement = m3.make_settlement(
+            "wrong-source",
+            "kalshi",
+            "KX-TEST",
+            "yes",
+            "1",
+            self.now,
+            source=source,
+        )
+        with self.assertRaisesRegex(m3.EvidenceError, "source identity"):
+            m3.record_settlement(self.connection, settlement, self.config)
+
     def test_reconciliation_detects_cash_tampering(self):
         self.connection.execute(
             "UPDATE paper_accounts SET cash = cash + 1 WHERE account_id = 'paper-v1'"

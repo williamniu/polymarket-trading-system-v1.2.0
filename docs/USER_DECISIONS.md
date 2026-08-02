@@ -63,6 +63,20 @@ The user approved the M3.5 runtime connection on 2026-08-01. Evidence-changing s
 
 The probe is not an alpha strategy. It buys the smallest valid contract and, on the venue's next turn, prioritizes closing an existing probe position. Its PnL measures execution friction, not predictive skill.
 
+## Approved M3.6 correctness repair
+
+The user approved this repair on 2026-08-02 after 30 probe failures exposed a missing-position lifecycle. No user risk or execution preference changed, so policy version 2 remains authoritative.
+
+| Approved behavior | User control | Evidence consequence |
+|---|---|---|
+| Resolve an open position from the venue's exact public market endpoint | Safety invariant, not an optimism knob | Prevents a truncated broad sample from stranding a position |
+| Settle only a final binary result from sealed official evidence | Safety invariant | Non-final and contradictory outcomes remain open or fail closed |
+| Permit a risk-reducing exit after the entry-time buffer | Safety invariant | Entry eligibility stays unchanged; exits still require an executable two-sided book |
+| Archive segment 1 and start segment 2 | Approved once for this repair | Segment 1 remains immutable; only segment 2 counts toward M3 promotion |
+| Keep one-contract size and all version-2 execution assumptions | User may revise later with approval | No configuration hash or policy version change |
+
+Future evidence-segment resets remain approval-gated. The `m3-new-segment` command is not an autonomous strategy control and fails unless the runtime probe is paused first.
+
 ## Boundaries that are not preference knobs
 
 - No look-ahead or favorable selection among later books.

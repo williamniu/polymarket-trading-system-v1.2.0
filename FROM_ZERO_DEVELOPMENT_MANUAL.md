@@ -59,18 +59,21 @@ Milestones may be implemented in parallel, but none may be promoted by bypassing
 
 - Every order records the user-approved configuration version, decision time, latency, instrument metadata, and source evidence hash.
 - Official selected-market metadata plus raw and normalized point-orderbook responses are sealed for replay.
+- Every open position is resolved by its exact official market identifier; a truncated broad-market sample is never proof that the position disappeared.
 - The first eligible post-latency book is used; later books cannot be selected for a better result.
 - Fills use executable prices and haircutted displayed depth, never midpoint or unlimited size.
 - Resting orders require trade-through after queue-ahead; a touched price alone is not a fill.
 - Published venue fees and rounding are versioned facts; rebates are not primary alpha.
 - Event and theme classifications come from sealed instrument evidence, not strategy input alone.
 - Cash, positions, fees, settlement and executable liquidation equity reconcile after every mutation.
+- Final binary outcomes are settled only from sealed official evidence. Non-final markets remain open without guessed prices, and entry-time buffers never block a valid risk-reducing exit.
 - M0 per-trade, event, theme, total, daily, rolling and drawdown controls remain authoritative.
 - Unsupported scalar, sub-cent, complex collateral, stale, halted or incomplete evidence fails closed.
 - M3 runtime probes remain paper-only and use public read endpoints; credentials and order endpoints remain prohibited.
 - Reconciliation failure freezes M3 while M2 collection continues; M3 cannot silently damage the older evidence chain.
 - M3.5 runtime probes stay at one contract until every open position can be marked from fresh executable books each cycle.
 - Evidence-changing configuration edits are rejected after the M3 clock starts; the operational probe switch may always stop new probes.
+- Correctness repairs preserve the old evidence segment and start a fresh promotion window; historical rows and archived counters are never rewritten.
 - Seven days, 600 paper intents and zero reconciliation errors are required before M3 promotion.
 
 ## Change control

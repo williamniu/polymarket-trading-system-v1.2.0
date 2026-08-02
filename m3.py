@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS paper_settlements (
     payout TEXT NOT NULL,
     observed_at TEXT NOT NULL,
     evidence_hash TEXT NOT NULL,
+    settlement_json TEXT,
     UNIQUE(venue, market_id, outcome)
 );
 CREATE TABLE IF NOT EXISTS paper_reconciliations (
@@ -658,6 +659,11 @@ def init_database(connection, now=None, risk_path=RISK_PATH):
     m2.init_database(connection, now=now, policy_path=risk_path)
     with connection:
         connection.executescript(M3_SCHEMA)
+        settlement_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(paper_settlements)")
+        }
+        if "settlement_json" not in settlement_columns:
+            connection.execute("ALTER TABLE paper_settlements ADD COLUMN settlement_json TEXT")
         if not connection.execute("SELECT 1 FROM paper_equity_history LIMIT 1").fetchone():
             account = account_row(connection)
             observed_at = (
@@ -1065,21 +1071,26 @@ def record_result(connection, order, result, config, policy):
     }
 
 
-def make_settlement(settlement_id, venue, market_id, outcome, price, observed_at, final=True):
+def make_settlement(
+    settlement_id, venue, market_id, outcome, price, observed_at, final=True, source=None
+):
     price = decimal(price, "settlement price")
     if not ZERO <= price <= ONE:
         raise EvidenceError("settlement price is outside zero and one")
-    return seal(
-        {
-            "settlement_id": str(settlement_id),
-            "venue": str(venue),
-            "market_id": str(market_id),
-            "outcome": outcome,
-            "price": decimal_text(price),
-            "observed_at": parse_time(observed_at).isoformat(),
-            "final": bool(final),
-        }
-    )
+    if source is not None:
+        verify_seal(source)
+    payload = {
+        "settlement_id": str(settlement_id),
+        "venue": str(venue),
+        "market_id": str(market_id),
+        "outcome": outcome,
+        "price": decimal_text(price),
+        "observed_at": parse_time(observed_at).isoformat(),
+        "final": bool(final),
+    }
+    if source is not None:
+        payload["source"] = source
+    return seal(payload)
 
 
 def record_settlement(connection, settlement, config, policy=None):
@@ -1093,6 +1104,14 @@ def record_settlement(connection, settlement, config, policy=None):
         raise EvidenceError("settlement identity is invalid")
     if not settlement.get("final"):
         raise EvidenceError("settlement is not final")
+    source = settlement.get("source")
+    if source is not None:
+        verify_seal(source)
+        if (source.get("venue"), source.get("market_id")) != (
+            settlement["venue"],
+            settlement["market_id"],
+        ):
+            raise EvidenceError("settlement source identity is invalid")
     price = decimal(settlement["price"])
     if not config["allow_scalar_settlement"] and price not in (ZERO, ONE):
         raise EvidenceError("scalar settlement is disabled")
@@ -1118,8 +1137,8 @@ def record_settlement(connection, settlement, config, policy=None):
             """
             INSERT INTO paper_settlements(
                 settlement_id, venue, market_id, outcome, settlement_price,
-                payout, observed_at, evidence_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                payout, observed_at, evidence_hash, settlement_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 settlement["settlement_id"],
@@ -1130,6 +1149,7 @@ def record_settlement(connection, settlement, config, policy=None):
                 decimal_text(payout),
                 settlement["observed_at"],
                 settlement["evidence_hash"],
+                canonical_json(settlement),
             ),
         )
         if position:

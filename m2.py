@@ -28,6 +28,7 @@ RAW_DIR = RUNTIME / "raw"
 CONFIG_PATH = ROOT / "config" / "m2.json"
 RISK_PATH = ROOT / "config" / "risk-policy.json"
 M3_CONFIG_PATH = ROOT / "config" / "m3.json"
+POLYMARKET_MARKET_URL = "https://gateway.polymarket.us/v1/market/slug"
 REQUIRED_VENUES = ("polymarket_us", "kalshi")
 
 
@@ -459,6 +460,14 @@ def mark_evidence_start(connection, now=None):
     return started_at, True
 
 
+def m3_config_digest(config):
+    import m3
+
+    evidence_config = json.loads(json.dumps(config))
+    evidence_config["runtime_probe"].pop("enabled", None)
+    return hashlib.sha256(m3.canonical_json(evidence_config).encode("utf-8")).hexdigest()
+
+
 def init_m3_runtime(connection, now=None):
     import m3
 
@@ -467,9 +476,7 @@ def init_m3_runtime(connection, now=None):
     policy = load_json(RISK_PATH)
     m3.check_configuration(config, policy)
     m3.init_database(connection, now=now)
-    evidence_config = json.loads(json.dumps(config))
-    evidence_config["runtime_probe"].pop("enabled", None)
-    digest = hashlib.sha256(m3.canonical_json(evidence_config).encode("utf-8")).hexdigest()
+    digest = m3_config_digest(config)
     with connection:
         connection.executescript(M3_RUNTIME_SCHEMA)
         pending = connection.execute(
@@ -491,9 +498,94 @@ def init_m3_runtime(connection, now=None):
             (digest,),
         )
         connection.execute(
-            "UPDATE meta SET value = '2' WHERE key = 'schema_version'"
+            "INSERT OR IGNORE INTO meta(key, value) VALUES ('m3_segment_number', '1')"
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO meta(key, value) VALUES ('m3_segment_start_probe_id', '1')"
+        )
+        connection.execute(
+            "UPDATE meta SET value = '3' WHERE key = 'schema_version'"
         )
     return config, policy
+
+
+def start_m3_evidence_segment(connection, reason, now=None):
+    import m3
+
+    reason = str(reason).strip()
+    if not reason:
+        raise ValueError("M3 evidence segment requires a reason")
+    config, _ = init_m3_runtime(connection, now)
+    if config["runtime_probe"]["enabled"]:
+        raise RuntimeError("disable the M3 runtime probe before starting a new evidence segment")
+    now = (now or utc_now()).isoformat()
+    number = int(
+        connection.execute(
+            "SELECT value FROM meta WHERE key = 'm3_segment_number'"
+        ).fetchone()["value"]
+    )
+    start_probe_id = int(
+        connection.execute(
+            "SELECT value FROM meta WHERE key = 'm3_segment_start_probe_id'"
+        ).fetchone()["value"]
+    )
+    started = connection.execute(
+        "SELECT value FROM meta WHERE key = 'm3_evidence_started_at'"
+    ).fetchone()
+    intents = connection.execute(
+        "SELECT COUNT(*) FROM m3_shadow_probes AS probe "
+        "JOIN paper_orders AS paper ON paper.order_id = probe.order_id "
+        "WHERE probe.probe_id >= ? AND probe.status = 'recorded'",
+        (start_probe_id,),
+    ).fetchone()[0]
+    failures = connection.execute(
+        "SELECT COUNT(*) FROM m3_shadow_probes WHERE probe_id >= ? AND status = 'failed'",
+        (start_probe_id,),
+    ).fetchone()[0]
+    if started is None and intents == 0 and failures == 0:
+        return {
+            "status": "already_fresh",
+            "segment_number": number,
+            "start_probe_id": start_probe_id,
+        }
+    next_probe_id = connection.execute(
+        "SELECT COALESCE(MAX(probe_id), 0) + 1 FROM m3_shadow_probes"
+    ).fetchone()[0]
+    archive = {
+        "segment_number": number,
+        "config_version": config["version"],
+        "config_sha256": m3_config_digest(config),
+        "started_at": started["value"] if started else None,
+        "ended_at": now,
+        "start_probe_id": start_probe_id,
+        "end_probe_id": next_probe_id - 1,
+        "order_intent_count": intents,
+        "failed_probe_count": failures,
+        "reason": reason,
+    }
+    with connection:
+        connection.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?)",
+            (f"m3_evidence_segment_archive_{number}", m3.canonical_json(archive)),
+        )
+        connection.execute("DELETE FROM meta WHERE key = 'm3_evidence_started_at'")
+        for key, value in (
+            ("m3_segment_number", str(number + 1)),
+            ("m3_segment_start_probe_id", str(next_probe_id)),
+            ("m3_segment_activated_at", now),
+            ("m3_segment_reason", reason),
+        ):
+            connection.execute(
+                "INSERT INTO meta(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+    return {
+        "status": "started",
+        "archived_segment": archive,
+        "segment_number": number + 1,
+        "start_probe_id": next_probe_id,
+    }
 
 
 def m3_market_time_is_safe(value, now, minimum_minutes):
@@ -501,7 +593,7 @@ def m3_market_time_is_safe(value, now, minimum_minutes):
     return parsed is not None and (parsed - now).total_seconds() >= minimum_minutes * 60
 
 
-def m3_instrument_from_market(venue, market, now, config):
+def m3_instrument_from_market(venue, market, now, config, closing=False):
     import m3
 
     probe = config["runtime_probe"]
@@ -514,8 +606,10 @@ def m3_instrument_from_market(venue, market, now, config):
             category = str(market.get("category", "")).strip().lower()
             tick = m3.decimal(market.get("orderPriceMinTickSize"))
             reported_fee = m3.decimal(market.get("feeCoefficient"))
-            bid = m3.raw_decimal(market.get("bestBidQuote"))
-            ask = m3.raw_decimal(market.get("bestAskQuote"))
+            bid = ask = None
+            if not closing:
+                bid = m3.raw_decimal(market.get("bestBidQuote"))
+                ask = m3.raw_decimal(market.get("bestAskQuote"))
             stressed_fee = m3.decimal(rule["taker_theta"]) * m3.decimal(
                 config["fee_stress_multiplier"]
             )
@@ -529,10 +623,16 @@ def m3_instrument_from_market(venue, market, now, config):
                 or tick < m3.decimal(config["minimum_tick_size"])
                 or m3.decimal(market.get("minimumTradeQty")) != m3.ONE
                 or reported_fee > stressed_fee
-                or not m3.ZERO < bid < ask < m3.ONE
-                or not m3_market_time_is_safe(market.get("endDate"), now, minimum_minutes)
+                or (not closing and not m3.ZERO < bid < ask < m3.ONE)
                 or (
-                    category == "sports"
+                    not closing
+                    and not m3_market_time_is_safe(
+                        market.get("endDate"), now, minimum_minutes
+                    )
+                )
+                or (
+                    not closing
+                    and category == "sports"
                     and not m3_market_time_is_safe(
                         market.get("gameStartTime"), now, minimum_minutes
                     )
@@ -552,10 +652,12 @@ def m3_instrument_from_market(venue, market, now, config):
             if not isinstance(ranges, list) or len(ranges) != 1:
                 return None
             tick = m3.decimal(ranges[0].get("step"))
-            bid = m3.decimal(market.get("yes_bid_dollars"))
-            ask = m3.decimal(market.get("yes_ask_dollars"))
-            bid_size = m3.decimal(market.get("yes_bid_size_fp"))
-            ask_size = m3.decimal(market.get("yes_ask_size_fp"))
+            bid = ask = bid_size = ask_size = None
+            if not closing:
+                bid = m3.decimal(market.get("yes_bid_dollars"))
+                ask = m3.decimal(market.get("yes_ask_dollars"))
+                bid_size = m3.decimal(market.get("yes_bid_size_fp"))
+                ask_size = m3.decimal(market.get("yes_ask_size_fp"))
             if (
                 market.get("market_type") != "binary"
                 or market.get("status") != "active"
@@ -563,12 +665,18 @@ def m3_instrument_from_market(venue, market, now, config):
                 or not event_id
                 or not rules
                 or tick < m3.decimal(config["minimum_tick_size"])
-                or not m3.ZERO < bid < ask < m3.ONE
-                or bid_size <= m3.ZERO
-                or ask_size <= m3.ZERO
-                or not m3_market_time_is_safe(market.get("close_time"), now, minimum_minutes)
+                or (not closing and not m3.ZERO < bid < ask < m3.ONE)
+                or (not closing and bid_size <= m3.ZERO)
+                or (not closing and ask_size <= m3.ZERO)
                 or (
-                    market.get("occurrence_datetime")
+                    not closing
+                    and not m3_market_time_is_safe(
+                        market.get("close_time"), now, minimum_minutes
+                    )
+                )
+                or (
+                    not closing
+                    and market.get("occurrence_datetime")
                     and not m3_market_time_is_safe(
                         market["occurrence_datetime"], now, minimum_minutes
                     )
@@ -593,30 +701,195 @@ def m3_instrument_from_market(venue, market, now, config):
         return None
 
 
+def fetch_m3_market(venue, market_id):
+    import m3
+
+    safe_id = urllib.parse.quote(str(market_id), safe="")
+    url = (
+        f"{POLYMARKET_MARKET_URL}/{safe_id}"
+        if venue == "polymarket_us"
+        else f"{m1.KALSHI_URL}/{safe_id}"
+    )
+    payload, latency_ms = m1.fetch_json(url, m1.load_config()["request_timeout_seconds"])
+    market = payload.get("market")
+    if not isinstance(market, dict):
+        raise m3.EvidenceError(f"{venue} exact market response has no market")
+    identity = market.get("slug") if venue == "polymarket_us" else market.get("ticker")
+    if identity != market_id:
+        raise m3.EvidenceError(f"{venue} exact market identity does not match the request")
+    observed_at = utc_now().isoformat()
+    raw = m3.seal(
+        {
+            "venue": venue,
+            "market_id": market_id,
+            "observed_at": observed_at,
+            "latency_ms": latency_ms,
+            "payload": payload,
+        }
+    )
+    return market, raw
+
+
+def validate_m3_position_market(position, market):
+    import m3
+
+    venue = position["venue"]
+    try:
+        if venue == "polymarket_us":
+            question = str(market.get("question", "")).strip()
+            category = str(market.get("category", "")).strip().lower()
+            outcomes = json.loads(market.get("outcomes", "null"))
+            event_id = "polymarket_us:question:" + hashlib.sha256(
+                question.casefold().encode("utf-8")
+            ).hexdigest()[:24]
+            theme_id = f"polymarket_us:category:{category}"
+            valid_product = outcomes == ["Yes", "No"] and market.get("comboEnabled") is False
+        else:
+            event_id = str(market.get("event_ticker", "")).strip()
+            theme_id = "kalshi:series:" + event_id.split("-", 1)[0].lower()
+            valid_product = (
+                market.get("market_type") == "binary"
+                and not market.get("mve_selected_legs")
+            )
+        if not valid_product or (event_id, theme_id) != (
+            position["event_id"],
+            position["theme_id"],
+        ):
+            raise m3.EvidenceError("official classification changed for an open probe position")
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise m3.EvidenceError("open probe position metadata is invalid") from exc
+
+
+def settle_m3_position(connection, position, market, metadata_raw, config, policy):
+    import m3
+
+    venue, market_id = position["venue"], position["market_id"]
+    if venue == "polymarket_us":
+        if market.get("closed") is not True:
+            return None
+        safe_id = urllib.parse.quote(market_id, safe="")
+        payload, latency_ms = m1.fetch_json(
+            f"{m1.POLYMARKET_URL}/{safe_id}/settlement",
+            m1.load_config()["request_timeout_seconds"],
+        )
+        if payload.get("slug") != market_id:
+            raise m3.EvidenceError("Polymarket settlement identity does not match the request")
+        yes_price = m3.decimal(payload.get("settlement"), "Polymarket settlement")
+        observed_at = utc_now().isoformat()
+        settlement_raw = m3.seal(
+            {
+                "venue": venue,
+                "market_id": market_id,
+                "observed_at": observed_at,
+                "latency_ms": latency_ms,
+                "payload": payload,
+            }
+        )
+        source = m3.seal(
+            {
+                "venue": venue,
+                "market_id": market_id,
+                "observed_at": observed_at,
+                "metadata": metadata_raw,
+                "settlement": settlement_raw,
+            }
+        )
+    else:
+        if market.get("status") != "finalized":
+            return None
+        result = market.get("result")
+        if result not in ("yes", "no"):
+            raise m3.EvidenceError("Kalshi finalized market has no binary result")
+        yes_price = m3.ONE if result == "yes" else m3.ZERO
+        reported = market.get("settlement_value_dollars")
+        if reported is not None and m3.decimal(reported) != yes_price:
+            raise m3.EvidenceError("Kalshi result conflicts with its settlement value")
+        observed_at = metadata_raw["observed_at"]
+        source = metadata_raw
+    if yes_price not in (m3.ZERO, m3.ONE):
+        raise m3.EvidenceError("official settlement is not binary")
+    price = yes_price if position["outcome"] == "yes" else m3.ONE - yes_price
+    settlement = m3.make_settlement(
+        f"m3-settlement-{venue}-{market_id}-{position['outcome']}",
+        venue,
+        market_id,
+        position["outcome"],
+        price,
+        observed_at,
+        source=source,
+    )
+    return m3.record_settlement(connection, settlement, config, policy)
+
+
+def prepare_m3_position(connection, venue, markets, config, policy):
+    import m3
+
+    positions = connection.execute(
+        "SELECT * FROM paper_positions WHERE account_id = 'paper-v1' AND venue = ? ORDER BY updated_at",
+        (venue,),
+    ).fetchall()
+    if len(positions) > 1:
+        raise m3.RiskError("more than one open probe position exists for a venue")
+    if not positions:
+        return list(markets), None, None
+    position = positions[0]
+    market, metadata_raw = fetch_m3_market(venue, position["market_id"])
+    validate_m3_position_market(position, market)
+    settlement = settle_m3_position(
+        connection, position, market, metadata_raw, config, policy
+    )
+    if settlement is not None:
+        return list(markets), settlement, None
+    tradeable = (
+        market.get("active") is True and market.get("closed") is False
+        if venue == "polymarket_us"
+        else market.get("status") == "active"
+    )
+    if not tradeable:
+        return list(markets), None, "open probe position is awaiting final settlement"
+    exact = [market]
+    exact.extend(
+        item
+        for item in markets
+        if (item.get("slug") if venue == "polymarket_us" else item.get("ticker"))
+        != position["market_id"]
+    )
+    return exact, None, None
+
+
 def select_m3_instrument(connection, venue, markets, now, config):
     import m3
 
-    instruments = [
-        item
-        for market in markets
-        if (item := m3_instrument_from_market(venue, market, now, config)) is not None
-    ]
     positions = connection.execute(
         "SELECT * FROM paper_positions WHERE account_id = 'paper-v1' AND venue = ? ORDER BY updated_at",
         (venue,),
     ).fetchall()
     if positions:
         position = positions[0]
-        matching = [item for item in instruments if item["market_id"] == position["market_id"]]
-        if not matching:
+        matching = [
+            market
+            for market in markets
+            if (market.get("slug") if venue == "polymarket_us" else market.get("ticker"))
+            == position["market_id"]
+        ]
+        instrument = (
+            m3_instrument_from_market(venue, matching[0], now, config, closing=True)
+            if matching
+            else None
+        )
+        if instrument is None:
             raise m3.EvidenceError("an open probe position has no current official market metadata")
-        instrument = matching[0]
         if (instrument["event_id"], instrument["theme_id"]) != (
             position["event_id"],
             position["theme_id"],
         ):
             raise m3.EvidenceError("official classification changed for an open probe position")
         return instrument, True
+    instruments = [
+        item
+        for market in markets
+        if (item := m3_instrument_from_market(venue, market, now, config)) is not None
+    ]
     if not instruments:
         raise m3.EvidenceError("no eligible simple binary market exists for the probe")
 
@@ -781,8 +1054,31 @@ def run_m3_shadow_probe(connection, cycle_id, market_sink):
             )
         return {"status": "skipped", "venue": venue, "reason": "paper account frozen"}
     markets = market_sink.get(venue)
-    if not markets:
+    if markets is None:
         raise m3.EvidenceError(f"{venue} has no current official market data")
+    markets, settlement, waiting = prepare_m3_position(
+        connection, venue, markets, config, policy
+    )
+    if waiting:
+        now = utc_now().isoformat()
+        with connection:
+            connection.execute(
+                "INSERT INTO m3_shadow_probes(cycle_id, venue, status, error, created_at) "
+                "VALUES (?, ?, 'skipped', ?, ?)",
+                (cycle_id, venue, waiting, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO heartbeats(component, observed_at, status, detail)
+                VALUES ('m3_shadow', ?, 'ok', ?)
+                ON CONFLICT(component) DO UPDATE SET
+                    observed_at = excluded.observed_at,
+                    status = excluded.status,
+                    detail = excluded.detail
+                """,
+                (now, waiting),
+            )
+        return {"status": "skipped", "venue": venue, "reason": waiting}
     instrument, closing = select_m3_instrument(connection, venue, markets, utc_now(), config)
     decision_book, decision_latency, decision_raw = fetch_m3_book(instrument, config)
     bids, asks = m3.validate_book(decision_book)
@@ -900,6 +1196,7 @@ def run_m3_shadow_probe(connection, cycle_id, market_sink):
         "reconciliation_status": recorded["status"],
         "cash": recorded["cash"],
         "equity": recorded["equity"],
+        "settlement": settlement,
     }
 
 
@@ -916,17 +1213,42 @@ def m3_shadow_status(connection, now=None):
     elapsed = 0.0 if not started else max(
         0.0, (now - datetime.fromisoformat(started["value"])).total_seconds() / 3600
     )
+    segment = connection.execute(
+        "SELECT value FROM meta WHERE key = 'm3_segment_number'"
+    ).fetchone()
+    start_probe = connection.execute(
+        "SELECT value FROM meta WHERE key = 'm3_segment_start_probe_id'"
+    ).fetchone()
+    activated = connection.execute(
+        "SELECT value FROM meta WHERE key = 'm3_segment_activated_at'"
+    ).fetchone()
+    segment_number = int(segment["value"]) if segment else 1
+    start_probe_id = int(start_probe["value"]) if start_probe else 1
     intents = connection.execute(
-        "SELECT COUNT(*) FROM m3_shadow_probes WHERE status = 'recorded'"
+        "SELECT COUNT(*) FROM m3_shadow_probes AS probe "
+        "JOIN paper_orders AS paper ON paper.order_id = probe.order_id "
+        "WHERE probe.probe_id >= ? AND probe.status = 'recorded'",
+        (start_probe_id,),
     ).fetchone()[0]
     failed = connection.execute(
+        "SELECT COUNT(*) FROM m3_shadow_probes WHERE probe_id >= ? AND status = 'failed'",
+        (start_probe_id,),
+    ).fetchone()[0]
+    lifetime_intents = connection.execute(
+        "SELECT COUNT(*) FROM m3_shadow_probes AS probe "
+        "JOIN paper_orders AS paper ON paper.order_id = probe.order_id "
+        "WHERE probe.status = 'recorded'"
+    ).fetchone()[0]
+    lifetime_failed = connection.execute(
         "SELECT COUNT(*) FROM m3_shadow_probes WHERE status = 'failed'"
     ).fetchone()[0]
     pending = connection.execute(
         "SELECT COUNT(*) FROM m3_shadow_probes WHERE status = 'pending'"
     ).fetchone()[0]
     reconciliation_errors = connection.execute(
-        "SELECT COUNT(*) FROM alerts WHERE code = 'm3_reconciliation_failure'"
+        "SELECT COUNT(*) FROM alerts WHERE code = 'm3_reconciliation_failure' "
+        "AND (? IS NULL OR created_at >= ?)",
+        (activated["value"] if activated else None, activated["value"] if activated else None),
     ).fetchone()[0]
     runtime_frozen = connection.execute(
         "SELECT value FROM meta WHERE key = 'm3_runtime_frozen_at'"
@@ -947,10 +1269,15 @@ def m3_shadow_status(connection, now=None):
     )
     return {
         "status": "blocked" if runtime_frozen or (account and account["frozen"]) else "collecting" if started else "not_started",
+        "segment_number": segment_number,
+        "segment_activated_at": activated["value"] if activated else None,
+        "segment_start_probe_id": start_probe_id,
         "evidence_started_at": started["value"] if started else None,
         "elapsed_hours": round(elapsed, 3),
         "order_intent_count": intents,
         "failed_probe_count": failed,
+        "lifetime_order_intent_count": lifetime_intents,
+        "lifetime_failed_probe_count": lifetime_failed,
         "pending_probe_count": pending,
         "reconciliation_error_count": reconciliation_errors,
         "runtime_frozen_at": runtime_frozen["value"] if runtime_frozen else None,
@@ -1158,6 +1485,15 @@ def initialize_m3():
     return 0
 
 
+def initialize_m3_segment(reason):
+    with writer_lock():
+        with connect() as connection:
+            init_database(connection)
+            result = start_m3_evidence_segment(connection, reason)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
 def show_status(check_only=False):
     if not DB_PATH.exists():
         result = {"status": "unhealthy", "checks": {"database": False}, "reason": "database missing"}
@@ -1203,6 +1539,7 @@ def main():
         choices=(
             "init",
             "m3-init",
+            "m3-new-segment",
             "cycle",
             "service-cycle",
             "status",
@@ -1218,6 +1555,10 @@ def main():
         return initialize()
     if command == "m3-init":
         return initialize_m3()
+    if command == "m3-new-segment":
+        if not arguments.source:
+            parser.error("m3-new-segment requires a reason")
+        return initialize_m3_segment(arguments.source)
     if command == "cycle":
         return run_cycle()
     if command == "service-cycle":

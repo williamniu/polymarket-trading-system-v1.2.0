@@ -181,3 +181,56 @@ Residual gates:
 - At most one sub-$1 probe position per venue can remain until that venue's next turn; M4 must isolate strategy positions before signals are added.
 - Polymarket US resting fills remain unverified without complete public trade evidence; M3.5 uses only marketable-limit probes.
 - Alert delivery remains local; remote notifications and the dashboard are future milestones.
+
+## M3.6 position lifecycle and settlement review
+
+Date: 2026-08-02
+
+Decision: **PASS for approved active paper-only M3.6 deployment and segment-2 evidence collection.** This repairs execution evidence only. It does not promote M3, establish alpha, or authorize live trading.
+
+Verified attacks:
+
+- an open position omitted from the 5,000-market sample is recovered only through its exact official identifier;
+- an exact response with the wrong market, event, theme or product identity fails closed;
+- a final Kalshi result must agree with its official settlement value;
+- a Polymarket settlement must be binary and belong to the requested slug;
+- a non-final market remains open without a guessed mark or settlement;
+- a risk-reducing exit may bypass the entry-time buffer but still requires a valid executable book;
+- official metadata and settlement responses are sealed inside the persisted settlement object;
+- duplicate settlement remains impossible and every mutation reconciles cash and equity;
+- a fresh evidence segment archives prior counters without deleting historical probes, orders or alerts;
+- an evidence segment cannot be reset while the runtime probe is enabled;
+- a forged `recorded` probe without a matching paper order does not count toward promotion.
+
+Pre-deployment evidence:
+
+- Homebrew Python 3.11: 67 repository tests, compilation and whitespace checks passed.
+- An online backup copy archived segment 1 with 46 valid paper intents and 30 failed probes, then initialized segment 2 at zero.
+- Dry-run cycle 191 recovered and closed the omitted active Polymarket position from its exact public endpoint.
+- Dry-run cycle 192 settled the finalized Kalshi YES position at `$1.00`, sealed the complete official response, reconciled exactly, and opened the next one-contract probe.
+- After both dry-run cycles, segment 2 had two valid intents, zero failures, zero reconciliation errors, no pending probe and `PRAGMA integrity_check = ok`.
+
+Active deployment evidence:
+
+- Final adversarial verification passed 68 repository tests, including the official Polymarket settlement schema and the paused-probe segment-reset guard; compilation, JSON, plist and whitespace checks also passed.
+- Immediate pre-deployment backup `state-20260802T222621982706Z.sqlite3` passed integrity check and has SHA-256 `2795620ea9ce95b1ad21c12cc3d3201c9765492ea955494f64547d0b5c667054`.
+- Segment 1 was archived at probe 77 with 46 valid intents and 30 failures. Segment 2 began at probe 78; no historical probe, order, settlement or alert was deleted.
+- The first natural post-deployment LaunchAgent cycle was 192. It recovered the finalized Kalshi position by exact ticker, verified that official result `yes` agreed with settlement value `1`, sealed the response, settled one YES contract for `$1.00`, reconciled exactly, and opened the next one-contract Kalshi probe.
+- The second natural post-deployment LaunchAgent cycle was 193. It recovered and closed the omitted active Polymarket position from the exact market endpoint, then reconciled exactly. No Polymarket position remained.
+- All 14 new evidence seals re-verified, `PRAGMA integrity_check` returned `ok`, LaunchAgent reported 118 runs with last exit code 0, and stderr was empty.
+- At `2026-08-02T22:44:12Z`, segment 2 had two valid intents, zero failures, zero reconciliation errors and no pending probe. The paper account held `$4,998.23` cash, `$4,998.77` executable equity and one sub-$1 Kalshi probe position.
+
+Findings closed during review:
+
+- **Critical:** finalized positions were never routed into the existing settlement engine, so stale marks could persist indefinitely. Exact-market lifecycle resolution now settles final binary outcomes from sealed official evidence.
+- **High:** broad sample truncation was treated as missing official metadata, stranding otherwise valid positions. Existing positions now use exact market lookup; the broad list remains only an entry candidate source.
+- **High:** the 60-minute entry buffer also blocked late risk-reducing exits. Entry and exit eligibility are now distinct while book validation remains unchanged.
+- **High:** the original M3 clock could have promoted evidence collected under the lifecycle defect. Segment 1 is immutable diagnostic history; segment 2 alone counts toward promotion.
+- **High:** settlement rows retained only a derived hash, not the replayable official source. The sealed settlement object and source response are now persisted together.
+
+Residual gates:
+
+- Segment 2 must independently reach 168 hours, 600 valid intents and zero reconciliation errors.
+- Probe PnL remains execution-friction evidence, not predictive alpha.
+- Polymarket US resting fills remain unverified; runtime probes remain marketable-limit only.
+- Remote alert delivery and a user dashboard remain future milestones.

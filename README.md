@@ -7,7 +7,7 @@ A paper-only research system designed to become more reliable through measured f
 - **M1 venue validation is still collecting evidence through M2.** No venue has passed the 168-hour/600-sample gate.
 - **M2 paper infrastructure is deployed.** Its evidence clock started at `2026-08-01T17:14:33Z`; the first two launchd-managed cycles passed, but the separate 168-hour/600-cycle promotion gate remains locked.
 - M2 uses one SQLite source of truth, heartbeats, health checks, alerts, backups, evidence migration, and a $5,000 simulated account baseline.
-- **M3.5 paper shadow execution is connected to the existing M2 service.** It alternates one-contract public-data probes across both venues, seals raw and normalized point books, measures p95 latency plus 250 ms, applies stressed fees, and keeps a separate 168-hour/600-intent clock.
+- **M3.6 paper shadow execution is connected to the existing M2 service.** It alternates one-contract public-data probes, resolves open positions through exact public market endpoints, seals official settlements, and keeps promotion evidence in immutable segments.
 - M3 probe PnL is execution-friction evidence, not a strategy or profitability claim. M4 remains locked.
 - There is no credential loading, signing, order submission, deposit, withdrawal, or live-trading code.
 - Market making, latency arbitrage, and maker-rebate capture are prohibited as primary alpha sources.
@@ -35,6 +35,7 @@ The deterministic runtime collects evidence and enforces hard rules. An LLM may 
 ```bash
 /opt/homebrew/bin/python3.11 m2.py init
 /opt/homebrew/bin/python3.11 m2.py m3-init
+/opt/homebrew/bin/python3.11 m2.py m3-new-segment "approved reason"
 /opt/homebrew/bin/python3.11 m2.py cycle
 /opt/homebrew/bin/python3.11 m2.py status
 /opt/homebrew/bin/python3.11 m2.py check
@@ -53,4 +54,4 @@ See `docs/MENTAL_MODEL.md` for the project knowledge graph and the distinction b
 /opt/homebrew/bin/python3.11 m2.py status
 ```
 
-The safe operational stop is `runtime_probe.enabled` in `config/m3.json`. Other evidence-changing M3 edits are rejected after the clock starts until a new version and evidence segment are approved. See `docs/USER_DECISIONS.md` for the complete user-editable control surface.
+The safe operational stop is `runtime_probe.enabled` in `config/m3.json`. `m3-new-segment` is an approval-gated maintenance command that requires this switch to be disabled and archives the prior counters without rewriting its rows. Other evidence-changing M3 edits are rejected after the clock starts until a new version and evidence segment are approved. See `docs/USER_DECISIONS.md` for the complete user-editable control surface.

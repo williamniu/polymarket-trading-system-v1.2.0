@@ -329,6 +329,215 @@ class M2Test(unittest.TestCase):
             )
             self.assertTrue(closing)
 
+    def test_m3_exact_active_market_closes_position_missing_from_broad_sample(self):
+        now = datetime.now(timezone.utc)
+        market = self.polymarket(now)
+        with self.connection() as connection:
+            self.record_m3_position(connection, "polymarket_us", market, now)
+            market["endDate"] = (now + timedelta(minutes=1)).isoformat()
+            cycle_id, _ = m2.record_snapshot(
+                connection, self.snapshot(now), now, now, free_disk_mb=5000
+            )
+            calls = 0
+
+            def point_book(instrument, _config):
+                nonlocal calls
+                observed_at = now + timedelta(milliseconds=400 * calls)
+                calls += 1
+                book = m3.make_book(
+                    instrument["venue"],
+                    instrument["market_id"],
+                    instrument["event_id"],
+                    instrument["theme_id"],
+                    "yes",
+                    instrument["tick_size"],
+                    instrument["fee_rule_id"],
+                    observed_at,
+                    [["0.45", "100"]],
+                    [["0.55", "100"]],
+                )
+                return book, 100.0, m3.seal(
+                    {
+                        "venue": instrument["venue"],
+                        "market_id": instrument["market_id"],
+                        "observed_at": observed_at.isoformat(),
+                        "payload": {"test": True},
+                    }
+                )
+
+            metadata = m3.seal(
+                {
+                    "venue": "polymarket_us",
+                    "market_id": market["slug"],
+                    "observed_at": now.isoformat(),
+                    "payload": {"market": market},
+                }
+            )
+            with patch.object(m2, "fetch_m3_market", return_value=(market, metadata)), patch.object(
+                m2, "fetch_m3_book", side_effect=point_book
+            ), patch.object(m2.time, "sleep"):
+                result = m2.run_m3_shadow_probe(
+                    connection, cycle_id, {"polymarket_us": []}
+                )
+            self.assertEqual(result["status"], "recorded")
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT 1 FROM paper_positions WHERE venue = 'polymarket_us'"
+                ).fetchone()
+            )
+
+    def test_m3_finalized_kalshi_position_settles_once_from_sealed_source(self):
+        now = datetime.now(timezone.utc)
+        market = self.kalshi(now)
+        with self.connection() as connection:
+            self.record_m3_position(connection, "kalshi", market, now)
+            market.update({"status": "finalized", "result": "yes"})
+            metadata = m3.seal(
+                {
+                    "venue": "kalshi",
+                    "market_id": market["ticker"],
+                    "observed_at": now.isoformat(),
+                    "payload": {"market": market},
+                }
+            )
+            config = json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8"))
+            policy = json.loads(
+                (ROOT / "config" / "risk-policy.json").read_text(encoding="utf-8")
+            )
+            with patch.object(m2, "fetch_m3_market", return_value=(market, metadata)):
+                _, settlement, waiting = m2.prepare_m3_position(
+                    connection, "kalshi", [], config, policy
+                )
+                _, repeated, _ = m2.prepare_m3_position(
+                    connection, "kalshi", [], config, policy
+                )
+            row = connection.execute("SELECT * FROM paper_settlements").fetchone()
+            sealed = json.loads(row["settlement_json"])
+            m3.verify_seal(sealed)
+            m3.verify_seal(sealed["source"])
+            self.assertEqual(settlement["payout"], "1.00")
+            self.assertIsNone(waiting)
+            self.assertIsNone(repeated)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM paper_settlements").fetchone()[0], 1)
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT 1 FROM paper_positions WHERE venue = 'kalshi'"
+                ).fetchone()
+            )
+
+    def test_m3_closed_polymarket_position_uses_binary_official_settlement(self):
+        now = datetime.now(timezone.utc)
+        market = self.polymarket(now)
+        with self.connection() as connection:
+            self.record_m3_position(connection, "polymarket_us", market, now)
+            market.update({"active": False, "closed": True})
+            metadata = m3.seal(
+                {
+                    "venue": "polymarket_us",
+                    "market_id": market["slug"],
+                    "observed_at": now.isoformat(),
+                    "payload": {"market": market},
+                }
+            )
+            config = json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8"))
+            policy = json.loads(
+                (ROOT / "config" / "risk-policy.json").read_text(encoding="utf-8")
+            )
+            official = {"slug": market["slug"], "settlement": 1.0}
+            with patch.object(m2, "fetch_m3_market", return_value=(market, metadata)), patch.object(
+                m2.m1, "fetch_json", return_value=(official, 25.0)
+            ):
+                _, settlement, waiting = m2.prepare_m3_position(
+                    connection, "polymarket_us", [], config, policy
+                )
+            sealed = json.loads(
+                connection.execute(
+                    "SELECT settlement_json FROM paper_settlements"
+                ).fetchone()["settlement_json"]
+            )
+            m3.verify_seal(sealed["source"])
+            m3.verify_seal(sealed["source"]["settlement"])
+            self.assertEqual(settlement["payout"], "1.00")
+            self.assertIsNone(waiting)
+            self.assertEqual(sealed["source"]["settlement"]["payload"], official)
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT 1 FROM paper_positions WHERE venue = 'polymarket_us'"
+                ).fetchone()
+            )
+
+    def test_m3_nonfinal_position_waits_without_guessing_or_settling(self):
+        now = datetime.now(timezone.utc)
+        market = self.kalshi(now)
+        with self.connection() as connection:
+            self.record_m3_position(connection, "kalshi", market, now)
+            market["status"] = "closed"
+            metadata = m3.seal(
+                {
+                    "venue": "kalshi",
+                    "market_id": market["ticker"],
+                    "observed_at": now.isoformat(),
+                    "payload": {"market": market},
+                }
+            )
+            config = json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8"))
+            policy = json.loads(
+                (ROOT / "config" / "risk-policy.json").read_text(encoding="utf-8")
+            )
+            with patch.object(m2, "fetch_m3_market", return_value=(market, metadata)):
+                _, settlement, waiting = m2.prepare_m3_position(
+                    connection, "kalshi", [], config, policy
+                )
+            self.assertIsNone(settlement)
+            self.assertIn("awaiting final settlement", waiting)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM paper_settlements").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM paper_positions").fetchone()[0], 1)
+
+    def test_m3_new_evidence_segment_preserves_old_counts_and_is_idempotent(self):
+        now = datetime.now(timezone.utc)
+        with self.connection() as connection:
+            m2.init_m3_runtime(connection, now)
+            self.record_m3_position(
+                connection, "polymarket_us", self.polymarket(now), now
+            )
+            connection.execute(
+                "INSERT INTO meta(key, value) VALUES ('m3_evidence_started_at', ?)",
+                ((now - timedelta(hours=1)).isoformat(),),
+            )
+            connection.execute(
+                "INSERT INTO cycles(snapshot_at, started_at, finished_at, status) VALUES (?, ?, ?, 'ok')",
+                (now.isoformat(), now.isoformat(), now.isoformat()),
+            )
+            connection.execute(
+                "INSERT INTO m3_shadow_probes(cycle_id, venue, status, order_id, created_at) "
+                "VALUES (1, 'polymarket_us', 'recorded', 'open-polymarket_us', ?)",
+                (now.isoformat(),),
+            )
+            with self.assertRaisesRegex(RuntimeError, "disable the M3 runtime probe"):
+                m2.start_m3_evidence_segment(connection, "correctness repair", now)
+            disabled_path = self.root / "m3-disabled.json"
+            disabled = json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8"))
+            disabled["runtime_probe"]["enabled"] = False
+            disabled_path.write_text(json.dumps(disabled), encoding="utf-8")
+            with patch.object(m2, "M3_CONFIG_PATH", disabled_path):
+                result = m2.start_m3_evidence_segment(connection, "correctness repair", now)
+                repeated = m2.start_m3_evidence_segment(
+                    connection, "correctness repair", now + timedelta(minutes=1)
+                )
+            status = m2.m3_shadow_status(connection, now + timedelta(minutes=1))
+            archive = json.loads(
+                connection.execute(
+                    "SELECT value FROM meta WHERE key = 'm3_evidence_segment_archive_1'"
+                ).fetchone()["value"]
+            )
+            self.assertEqual(result["status"], "started")
+            self.assertEqual(repeated["status"], "already_fresh")
+            self.assertEqual(archive["order_intent_count"], 1)
+            self.assertEqual(status["segment_number"], 2)
+            self.assertEqual(status["order_intent_count"], 0)
+            self.assertEqual(status["lifetime_order_intent_count"], 1)
+            self.assertIsNone(status["evidence_started_at"])
+
     def test_m3_latency_is_empirical_p95_plus_buffer(self):
         with self.connection() as connection:
             m2.init_m3_runtime(connection)
@@ -550,6 +759,46 @@ class M2Test(unittest.TestCase):
             "yes_ask_size_fp": "100",
             "volume_24h_fp": "1000",
         }
+
+    @staticmethod
+    def record_m3_position(connection, venue, market, now):
+        m3.init_database(connection, now)
+        config = json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8"))
+        policy = json.loads(
+            (ROOT / "config" / "risk-policy.json").read_text(encoding="utf-8")
+        )
+        execution = m2.m3_execution_config(config)
+        instrument = m2.m3_instrument_from_market(venue, market, now, config)
+        book = m3.make_book(
+            venue,
+            instrument["market_id"],
+            instrument["event_id"],
+            instrument["theme_id"],
+            "yes",
+            instrument["tick_size"],
+            instrument["fee_rule_id"],
+            now + timedelta(milliseconds=250),
+            [["0.45", "100"]],
+            [["0.55", "100"]],
+        )
+        order = {
+            "order_id": f"open-{venue}",
+            "venue": venue,
+            "market_id": instrument["market_id"],
+            "event_id": instrument["event_id"],
+            "theme_id": instrument["theme_id"],
+            "outcome": "yes",
+            "action": "buy",
+            "order_type": "marketable_limit",
+            "quantity": "1",
+            "limit_price": "0.55",
+            "tick_size": instrument["tick_size"],
+            "fee_rule_id": instrument["fee_rule_id"],
+            "decision_at": now.isoformat(),
+            "latency_ms": 250,
+        }
+        result = m3.simulate_immediate(order, [book], execution)
+        m3.record_result(connection, order, result, execution, policy)
 
     def snapshot_at(self, minutes):
         return self.snapshot(datetime(2026, 8, 1, tzinfo=timezone.utc) + timedelta(minutes=minutes))
