@@ -34,16 +34,16 @@ flowchart TD
 | M0 | The system cannot silently escape paper mode or relax approved risk | Established in code and tests | A bypass, mutable limit, credential path, or live endpoint |
 | M1 | At least one legal venue has sufficiently reliable, structured, executable public data | Collecting evidence | Insufficient uptime, samples, rules, quotes, depth, or account eligibility |
 | M2 | One Mac can preserve state and detect failure continuously | Deployed paper-only; two scheduled cycles passed, while seven-day runtime evidence must still accrue | Duplicate writer, stale heartbeat, corrupt state, unrecoverable restart, missed schedule |
-| M3 | Paper fills resemble possible real fills | Offline engine implemented and tested; data adapter, active schema and runtime evidence remain locked | Midpoint fills, optimistic queue, spoofed classification, ignored fees/latency/depth/settlement |
+| M3 | Paper fills resemble possible real fills | M3.5 public-data shadow probes are deployed inside the existing M2 writer; runtime evidence is collecting | Midpoint fills, optimistic queue, spoofed classification, ignored fees/latency/depth/settlement |
 | M4 | A signal has incremental predictive value after costs | Not established | Look-ahead, selection bias, regime dependence, or negative out-of-sample value |
 | M5-M6 | The system can improve without grading or rewriting its own safety test | Not built | Self-promotion, test weakening, leakage, or failed rollback |
 | M7 | Small live capital can be operated legally and safely | Locked | Any missing prior gate or missing fresh approval |
 
 The correct current statement is: **we have improved the quality of future learning, not proved profitability.**
 
-Snapshot on 2026-08-01: 72 immutable M1 snapshots were archived and imported, three manual M2 probes were kept outside the M2 stability count, and the first two launchd-managed M2 cycles passed. The system is healthy enough to begin M2 evidence collection, not mature enough to leave M2 or place trades.
+Snapshot after the 2026-08-01 M3.5 deployment: venue validation has 116 samples over 29.026 hours; M2 has 41 eligible service cycles over 10.079 hours; M3 has two recorded paper intents over 0.259 hours, one per venue, with zero pending probes, failures or reconciliation errors. All three 168-hour/600-count gates remain locked.
 
-M3 adds a tested offline counterfactual: given sealed instrument data, an order, latency and later execution evidence, what conservative fills and account changes were possible? It does not yet add signals, automatic paper orders, or a runtime evidence clock.
+M3 now runs that counterfactual on public point-orderbook evidence. It automatically creates the smallest execution probe, but it still does not contain a predictive signal: buy/close probe PnL measures spread, latency, depth and fee friction only. The separate M3 clock cannot promote before 168 hours, 600 recorded intents and zero reconciliation errors.
 
 ## What changed from the previous work
 
@@ -59,14 +59,15 @@ M3 adds a tested offline counterfactual: given sealed instrument data, an order,
 | A live database file might be copied inconsistently | SQLite online backup plus integrity check | Recovery evidence is meaningful |
 | Service installation could be mistaken for service operation | The write-once M2 clock starts inside the first launchd `service-cycle`; two planned cycles and exit codes were observed | Runtime claims now begin with actual execution |
 
-## The two evidence clocks
+## The three evidence clocks
 
 Keep these separate in your mind:
 
 1. **Venue clock (M1):** imported M1 samples and future M2 collection both test whether the market-data venue is usable.
 2. **Runtime clock (M2):** starts once, at the actual M2 service cutover. Imported history and manual probes do not count toward its 168-hour/600-cycle gate.
+3. **Execution clock (M3):** starts with the first finalized runtime paper intent. Schema migration, failed preflight and prior offline tests do not count toward its 168-hour/600-intent gate.
 
-This separation prevents a classic self-deception: using old data quality evidence to claim new infrastructure reliability.
+This separation prevents a classic self-deception: using data quality to claim infrastructure reliability, or using infrastructure uptime to claim realistic execution.
 
 ## The knowledge graph vocabulary
 

@@ -7,7 +7,8 @@ A paper-only research system designed to become more reliable through measured f
 - **M1 venue validation is still collecting evidence through M2.** No venue has passed the 168-hour/600-sample gate.
 - **M2 paper infrastructure is deployed.** Its evidence clock started at `2026-08-01T17:14:33Z`; the first two launchd-managed cycles passed, but the separate 168-hour/600-cycle promotion gate remains locked.
 - M2 uses one SQLite source of truth, heartbeats, health checks, alerts, backups, evidence migration, and a $5,000 simulated account baseline.
-- **M3 is offline only.** A deterministic execution, fee, risk, settlement, and reconciliation engine exists, but it is not connected to the active database, service, credentials, or any order endpoint.
+- **M3.5 paper shadow execution is connected to the existing M2 service.** It alternates one-contract public-data probes across both venues, seals raw and normalized point books, measures p95 latency plus 250 ms, applies stressed fees, and keeps a separate 168-hour/600-intent clock.
+- M3 probe PnL is execution-friction evidence, not a strategy or profitability claim. M4 remains locked.
 - There is no credential loading, signing, order submission, deposit, withdrawal, or live-trading code.
 - Market making, latency arbitrage, and maker-rebate capture are prohibited as primary alpha sources.
 
@@ -33,6 +34,7 @@ The deterministic runtime collects evidence and enforces hard rules. An LLM may 
 
 ```bash
 /opt/homebrew/bin/python3.11 m2.py init
+/opt/homebrew/bin/python3.11 m2.py m3-init
 /opt/homebrew/bin/python3.11 m2.py cycle
 /opt/homebrew/bin/python3.11 m2.py status
 /opt/homebrew/bin/python3.11 m2.py check
@@ -44,10 +46,11 @@ Runtime files are written under ignored `runtime/`. The LaunchAgent uses `servic
 
 See `docs/MENTAL_MODEL.md` for the project knowledge graph and the distinction between inherited M1 venue evidence and the new M2 runtime-stability clock.
 
-## M3 offline command
+## M3 commands
 
 ```bash
 /opt/homebrew/bin/python3.11 m3.py check
+/opt/homebrew/bin/python3.11 m2.py status
 ```
 
-See `docs/USER_DECISIONS.md` for the user-editable control surface. M3 must receive a second approval before it can migrate the active SQLite schema or join `service-cycle`.
+The safe operational stop is `runtime_probe.enabled` in `config/m3.json`. Other evidence-changing M3 edits are rejected after the clock starts until a new version and evidence segment are approved. See `docs/USER_DECISIONS.md` for the complete user-editable control surface.

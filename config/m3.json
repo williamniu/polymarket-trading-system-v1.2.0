@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "mode": "offline_shadow",
+  "version": 2,
+  "mode": "runtime_shadow",
   "venues": [
     "polymarket_us",
     "kalshi"
@@ -24,6 +24,13 @@
   "fee_stress_multiplier": "1.25",
   "ignore_rebates": true,
   "allow_scalar_settlement": false,
+  "runtime_probe": {
+    "enabled": true,
+    "quantity": "1",
+    "outcome": "yes",
+    "minimum_time_to_close_minutes": 60,
+    "minimum_top_quote_notional": "10"
+  },
   "venue_rules": {
     "polymarket_us": {
       "rule_id": "polymarket-us-general-2026-04-03",

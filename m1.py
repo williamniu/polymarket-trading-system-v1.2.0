@@ -421,7 +421,7 @@ def build_report(snapshots, config):
     }
 
 
-def collect_snapshot(config=None, raw_dir=None):
+def collect_snapshot(config=None, raw_dir=None, market_sink=None):
     config, observed_at = config or load_config(), utc_now()
     stamp = observed_at.strftime("%Y%m%dT%H%M%S%fZ")
     snapshot = {"collected_at": observed_at.isoformat(), "venues": {}}
@@ -445,6 +445,8 @@ def collect_snapshot(config=None, raw_dir=None):
                     "sample_truncated": truncated,
                     **summary,
                 }
+                if market_sink is not None and name in ("polymarket_us", "kalshi"):
+                    market_sink[name] = markets
                 if raw_dir is not None:
                     atomic_json(
                         raw_dir / f"{stamp}-{name}.json.gz",

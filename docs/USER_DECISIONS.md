@@ -41,22 +41,27 @@ User policy may change prospectively. Immutable market evidence, historical orde
 | Paper capital | $5,000 | Yes, with approval | Requires account reconciliation and an explicit M2 migration decision |
 | First live tranche | $200-$300 | Yes, only at M7 | Requires all earlier gates and fresh live approval |
 
-## Approved M3 policy version 1
+## Approved M3 runtime policy version 2
 
-The user approved these defaults on 2026-08-01. They remain editable before the M3 runtime evidence clock starts. A later change creates a new M3 configuration version and restarts the affected M3 promotion evidence.
+The user approved the M3.5 runtime connection on 2026-08-01. Evidence-changing settings are locked once the M3 clock starts. Changing one later requires an approved configuration version and a new M3 evidence segment; history is retained.
 
-| Control | Approved default | Why |
+| Control you can edit | Approved default | Consequence of changing it after the clock starts |
 |---|---|---|
-| Venues | Polymarket US and Kalshi in paper mode | M1 has not selected a winner |
-| Products | Simple binary contracts | Complex combo, leverage and scalar collateral are not needed to validate basic execution |
-| First execution type | Marketable limit/IOC behavior | Bounded slippage without pretending a resting order filled |
-| Slippage cap | Two instrument ticks | Small, explicit execution tolerance |
-| Executable depth credit | 50% of observed depth | Haircut for cancellation and race risk |
-| Latency | Measured p95 plus 250 ms processing buffer | Conservative and evidence-derived |
-| Resting fill | Trade-through plus queue-ahead volume; touch is never enough | Prevents optimistic maker fills |
-| Fees | Published fee plus a separate 1.25x stress case; rebates ignored | Profit cannot depend on a temporary promotion or maker rebate |
-| Runtime probe size | Smallest valid whole-contract order | Exercise execution without manufacturing strategy PnL |
-| Promotion gate | 168 hours, 600 intents, zero reconciliation errors | Matches the pre-registered evidence discipline of M1/M2 |
+| Runtime probe switch | Enabled; may be disabled immediately | Safe stop only; does not rewrite or reset evidence, and skipped cycles do not count as intents |
+| Venue order | Polymarket US, then Kalshi, alternating | New configuration version and M3 evidence segment |
+| Products | Simple binary contracts only | Adding scalar, combo, leverage or fractional products requires new implementation and approval |
+| Execution type | Marketable limit behavior | Resting execution requires complete trade evidence and a new evidence segment |
+| Slippage cap | Two instrument ticks | New configuration version and M3 evidence segment |
+| Executable depth credit | 50% of displayed depth | New configuration version and M3 evidence segment; higher values make fills more optimistic |
+| Latency | Point-request p95 plus 250 ms | New configuration version and M3 evidence segment; p99 is a valid more-conservative alternative |
+| Fee stress | 1.25x published fee, rebates ignored | New configuration version and M3 evidence segment; lowering below 1x is prohibited |
+| Probe size | One whole contract, enforced in M3.5 | Larger size requires complete per-cycle marking for every open position, approval, a new configuration version and a new M3 evidence segment |
+| Outcome | YES | New configuration version and M3 evidence segment; NO uses the same complementary-book validation |
+| Minimum time before close/start | 60 minutes | New configuration version and M3 evidence segment; a shorter buffer raises in-play and closure risk |
+| Minimum top-quote notional | $10 | New configuration version and M3 evidence segment; lowering it tests thinner books |
+| Promotion gate | 168 hours, 600 intents, zero reconciliation errors | New pre-registration and a fresh M3 evidence segment |
+
+The probe is not an alpha strategy. It buys the smallest valid contract and, on the venue's next turn, prioritizes closing an existing probe position. Its PnL measures execution friction, not predictive skill.
 
 ## Boundaries that are not preference knobs
 

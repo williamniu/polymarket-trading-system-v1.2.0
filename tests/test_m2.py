@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import m2
+import m3
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -252,6 +253,253 @@ class M2Test(unittest.TestCase):
         self.assertTrue(plist["StandardErrorPath"].endswith("runtime/m2/collector-error.log"))
         self.assertNotIn("KeepAlive", plist)
 
+    def test_m3_runtime_probe_records_sealed_evidence_and_stressed_fees(self):
+        now = datetime.now(timezone.utc)
+        market = self.polymarket(now)
+        with self.connection() as connection:
+            cycle_id, _ = m2.record_snapshot(
+                connection, self.snapshot(now), now, now, free_disk_mb=5000
+            )
+
+            calls = 0
+
+            def point_book(instrument, _config):
+                nonlocal calls
+                observed_at = now + timedelta(milliseconds=400 * calls)
+                calls += 1
+                book = m3.make_book(
+                        instrument["venue"],
+                        instrument["market_id"],
+                        instrument["event_id"],
+                        instrument["theme_id"],
+                        "yes",
+                        instrument["tick_size"],
+                        instrument["fee_rule_id"],
+                        observed_at,
+                        [["0.45", "100"]],
+                        [["0.55", "100"]],
+                    )
+                raw = m3.seal(
+                    {
+                        "venue": instrument["venue"],
+                        "market_id": instrument["market_id"],
+                        "observed_at": observed_at.isoformat(),
+                        "payload": {"test": True},
+                    }
+                )
+                return (
+                    book,
+                    100.0,
+                    raw,
+                )
+
+            with patch.object(m2, "fetch_m3_book", side_effect=point_book), patch.object(
+                m2.time, "sleep"
+            ):
+                result = m2.run_m3_shadow_probe(
+                    connection, cycle_id, {"polymarket_us": [market]}
+                )
+            probe = connection.execute("SELECT * FROM m3_shadow_probes").fetchone()
+            execution_config = json.loads(probe["execution_config_json"])
+            instrument = json.loads(probe["instrument_json"])
+
+            self.assertEqual(result["status"], "recorded")
+            self.assertEqual(probe["status"], "recorded")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM paper_orders").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM m3_latency_samples").fetchone()[0], 2)
+            self.assertEqual(execution_config["venue_rules"]["polymarket_us"]["taker_theta"], "0.0625")
+            self.assertEqual(execution_config["fee_stress_multiplier"], "1")
+            self.assertEqual(instrument["reported_fee_coefficient"], "0.06")
+            m3.verify_seal(instrument)
+            m3.verify_seal(json.loads(probe["decision_raw_json"]))
+            m3.verify_seal(json.loads(probe["decision_book_json"]))
+            m3.verify_seal(json.loads(probe["execution_raw_json"]))
+            m3.verify_seal(json.loads(probe["execution_book_json"]))
+            self.assertIsNotNone(
+                connection.execute(
+                    "SELECT value FROM meta WHERE key = 'm3_evidence_started_at'"
+                ).fetchone()
+            )
+            _, closing = m2.select_m3_instrument(
+                connection,
+                "polymarket_us",
+                [market],
+                now,
+                json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8")),
+            )
+            self.assertTrue(closing)
+
+    def test_m3_latency_is_empirical_p95_plus_buffer(self):
+        with self.connection() as connection:
+            m2.init_m3_runtime(connection)
+            now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+            first, _ = m2.record_snapshot(
+                connection, self.snapshot(now), now, now, free_disk_mb=5000
+            )
+            second_at = now + timedelta(minutes=1)
+            second, _ = m2.record_snapshot(
+                connection,
+                self.snapshot(second_at),
+                second_at,
+                second_at,
+                free_disk_mb=5000,
+            )
+            connection.executemany(
+                """
+                INSERT INTO m3_latency_samples(cycle_id, venue, phase, observed_at, latency_ms)
+                VALUES (?, 'kalshi', 'decision', ?, ?)
+                """,
+                (
+                    (first, "2026-08-01T00:00:00+00:00", 100),
+                    (second, "2026-08-01T00:01:00+00:00", 500),
+                ),
+            )
+            config = json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8"))
+            self.assertEqual(m2.m3_effective_latency_ms(connection, "kalshi", 200, config), 750)
+
+    def test_m3_failed_depth_probe_keeps_its_slow_latency_evidence(self):
+        now = datetime.now(timezone.utc)
+        market = self.polymarket(now)
+        with self.connection() as connection:
+            cycle_id, _ = m2.record_snapshot(
+                connection, self.snapshot(now), now, now, free_disk_mb=5000
+            )
+
+            def thin_book(instrument, _config):
+                book = m3.make_book(
+                    instrument["venue"],
+                    instrument["market_id"],
+                    instrument["event_id"],
+                    instrument["theme_id"],
+                    "yes",
+                    instrument["tick_size"],
+                    instrument["fee_rule_id"],
+                    now,
+                    [["0.45", "1"]],
+                    [["0.55", "1"]],
+                )
+                raw = m3.seal(
+                    {
+                        "venue": instrument["venue"],
+                        "market_id": instrument["market_id"],
+                        "observed_at": now.isoformat(),
+                        "payload": {"thin": True},
+                    }
+                )
+                return book, 900.0, raw
+
+            with patch.object(m2, "fetch_m3_book", side_effect=thin_book):
+                with self.assertRaisesRegex(m3.EvidenceError, "depth floor"):
+                    m2.run_m3_shadow_probe(
+                        connection, cycle_id, {"polymarket_us": [market]}
+                    )
+            self.assertEqual(
+                connection.execute("SELECT latency_ms FROM m3_latency_samples").fetchone()[0],
+                900.0,
+            )
+            self.assertEqual(
+                connection.execute("SELECT status FROM m3_shadow_probes").fetchone()[0],
+                "pending",
+            )
+
+    def test_m3_rejects_optimistic_or_live_polymarket_metadata(self):
+        now = datetime.now(timezone.utc)
+        config = json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8"))
+        market = self.polymarket(now)
+        self.assertIsNotNone(m2.m3_instrument_from_market("polymarket_us", market, now, config))
+        market["feeCoefficient"] = 0.07
+        self.assertIsNone(m2.m3_instrument_from_market("polymarket_us", market, now, config))
+        market = self.polymarket(now)
+        market["orderPriceMinTickSize"] = 0.001
+        self.assertIsNone(m2.m3_instrument_from_market("polymarket_us", market, now, config))
+        market = self.polymarket(now)
+        market["category"] = "sports"
+        market["gameStartTime"] = (now - timedelta(minutes=1)).isoformat()
+        self.assertIsNone(m2.m3_instrument_from_market("polymarket_us", market, now, config))
+        kalshi = self.kalshi(now)
+        self.assertIsNotNone(m2.m3_instrument_from_market("kalshi", kalshi, now, config))
+        kalshi["occurrence_datetime"] = (now - timedelta(minutes=1)).isoformat()
+        self.assertIsNone(m2.m3_instrument_from_market("kalshi", kalshi, now, config))
+
+    def test_m3_config_change_after_clock_fails_closed(self):
+        now = datetime.now(timezone.utc)
+        changed_path = self.root / "m3.json"
+        with self.connection() as connection:
+            m2.init_m3_runtime(connection, now)
+            connection.execute(
+                "INSERT INTO meta(key, value) VALUES ('m3_evidence_started_at', ?)",
+                (now.isoformat(),),
+            )
+            changed = json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8"))
+            changed["runtime_probe"]["enabled"] = False
+            changed_path.write_text(json.dumps(changed), encoding="utf-8")
+            with patch.object(m2, "M3_CONFIG_PATH", changed_path):
+                m2.init_m3_runtime(connection, now)
+            changed["depth_credit_fraction"] = "0.40"
+            changed_path.write_text(json.dumps(changed), encoding="utf-8")
+            with patch.object(m2, "M3_CONFIG_PATH", changed_path):
+                with self.assertRaisesRegex(RuntimeError, "changed after"):
+                    m2.init_m3_runtime(connection, now)
+
+    def test_m3_failure_does_not_erase_or_fail_the_m2_cycle(self):
+        now = datetime.now(timezone.utc)
+        with self.connection() as connection:
+            m2.init_m3_runtime(connection, now)
+        snapshot = self.snapshot(now)
+
+        def collection(**kwargs):
+            kwargs["market_sink"].update({"polymarket_us": [], "kalshi": []})
+            return snapshot
+
+        with patch.object(m2.m1, "collect_snapshot", side_effect=collection), patch.object(
+            m2, "run_m3_shadow_probe", side_effect=m3.EvidenceError("tampered book")
+        ), redirect_stdout(StringIO()):
+            self.assertEqual(m2.run_cycle(start_evidence=True), 0)
+        with m2.connect(self.db_path) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM cycles").fetchone()[0], "ok")
+            self.assertEqual(
+                connection.execute(
+                    "SELECT status FROM m3_shadow_probes"
+                ).fetchone()[0],
+                "failed",
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT code FROM alerts WHERE code = 'm3_probe_failure'"
+                ).fetchone()[0],
+                "m3_probe_failure",
+            )
+
+    def test_m3_reconciliation_failure_freezes_only_m3(self):
+        now = datetime.now(timezone.utc)
+        with self.connection() as connection:
+            m2.init_m3_runtime(connection, now)
+            cycle_id, _ = m2.record_snapshot(
+                connection, self.snapshot(now), now, now, free_disk_mb=5000
+            )
+            m2.record_m3_probe_failure(
+                connection, cycle_id, "kalshi", "paper account reconciliation failed"
+            )
+            status = m2.m3_shadow_status(connection, now)
+            collector = connection.execute(
+                "SELECT status FROM heartbeats WHERE component = 'collector'"
+            ).fetchone()[0]
+        self.assertEqual(status["status"], "blocked")
+        self.assertIsNotNone(status["runtime_frozen_at"])
+        self.assertEqual(status["reconciliation_error_count"], 1)
+        self.assertEqual(collector, "ok")
+
+    def test_m3_runtime_source_has_no_credential_or_order_path(self):
+        source = (ROOT / "m2.py").read_text(encoding="utf-8")
+        for forbidden in (
+            "KALSHI-ACCESS-KEY",
+            "X-PM-Access-Key",
+            "/portfolio/orders",
+            "/v1/orders",
+            "private_key",
+        ):
+            self.assertNotIn(forbidden, source)
+
     @staticmethod
     def snapshot(timestamp, kalshi_ok=True):
         return {
@@ -261,6 +509,46 @@ class M2Test(unittest.TestCase):
                 "kalshi": {"ok": kalshi_ok, "market_count": 100},
                 "kalshi_demo_probe": {"ok": True, "market_count": 1},
             },
+        }
+
+    @staticmethod
+    def polymarket(now):
+        return {
+            "id": "1",
+            "slug": "test-market",
+            "question": "Test event winner",
+            "category": "politics",
+            "description": "Official test rules",
+            "active": True,
+            "closed": False,
+            "comboEnabled": False,
+            "outcomes": '["Yes","No"]',
+            "orderPriceMinTickSize": 0.01,
+            "minimumTradeQty": 1,
+            "feeCoefficient": 0.06,
+            "endDate": (now + timedelta(days=10)).isoformat(),
+            "bestBidQuote": {"value": "0.45", "currency": "USD"},
+            "bestAskQuote": {"value": "0.55", "currency": "USD"},
+        }
+
+    @staticmethod
+    def kalshi(now):
+        return {
+            "ticker": "KXTEST-YES",
+            "event_ticker": "KXTEST",
+            "title": "Test event",
+            "rules_primary": "Official test rules",
+            "market_type": "binary",
+            "status": "active",
+            "price_level_structure": "linear_cent",
+            "price_ranges": [{"start": "0", "end": "1", "step": "0.01"}],
+            "close_time": (now + timedelta(days=10)).isoformat(),
+            "occurrence_datetime": (now + timedelta(days=9)).isoformat(),
+            "yes_bid_dollars": "0.45",
+            "yes_ask_dollars": "0.55",
+            "yes_bid_size_fp": "100",
+            "yes_ask_size_fp": "100",
+            "volume_24h_fp": "1000",
         }
 
     def snapshot_at(self, minutes):

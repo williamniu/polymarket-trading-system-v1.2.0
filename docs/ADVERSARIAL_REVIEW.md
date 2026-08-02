@@ -134,3 +134,50 @@ Residual gates before M3.5:
 - Polymarket US resting fills cannot be verified from current public REST evidence alone; missing trade tape must remain `unverified` unless separately approved read-only access is added.
 - Sub-cent, fractional, scalar, combo, leverage and complex collateral products remain unsupported and fail closed.
 - The active database has no M3 tables, the running service imports no M3 code, and the M3 168-hour/600-intent clock has not started.
+
+## M3.5 runtime shadow review
+
+Date: 2026-08-01
+
+Decision: **PASS for approved public-data paper deployment and evidence collection only.** This does not promote M3, prove an edge, or authorize credentials or live orders.
+
+Verified attacks:
+
+- the active SQLite database was backed up and integrity-checked before schema migration;
+- schema migration alone created no order intent and did not start the M3 clock;
+- M3 runs inside the existing M2 writer and cannot create a second LaunchAgent or database;
+- selected event, theme, tick and fee fields are derived from sealed official market metadata;
+- in-play, sub-cent, combo, scalar, fractional, thin or one-sided markets fail eligibility;
+- raw point responses, normalized books, the execution configuration and result are separately sealed;
+- point-request p95 plus 250 ms determines eligibility, and slow failed depth probes remain in the latency sample;
+- runtime fills use 50% depth, two-tick limits and 1.25x fee coefficients with rebates ignored;
+- M3 errors do not erase or fail the completed M2 collection cycle;
+- a reconciliation error durably alerts and freezes M3 while M2 continues;
+- the safe runtime switch can stop probes without rewriting evidence; other configuration changes fail after the clock starts;
+- no credential header, private key, authenticated call or order endpoint exists in the runtime source.
+
+Deployment evidence:
+
+- Pre-migration backup `state-20260802T023541355506Z.sqlite3` passed integrity check and has SHA-256 `4507ef05db25e468c9aa15f2e5c1b84710b56e9bf3b4d8fa4dc665282387d19e`.
+- Schema version 2 initialized with M3 clock null, zero intents, zero failures and zero reconciliation errors; M2 remained healthy.
+- The first natural LaunchAgent cycle was 115 at `2026-08-02T03:04:03Z`. Its Polymarket US probe filled one paper contract, reconciled exactly, and started the M3 clock at `2026-08-02T03:04:09.386305Z`.
+- The first probe measured 76.3 ms decision-book and 79.4 ms execution-book requests, producing a 327 ms p95-plus-buffer assumption. Six sealed artifacts re-verified and the post-probe SQLite backup passed integrity check.
+- The second natural LaunchAgent cycle was 116 at `2026-08-02T03:19:10Z`. Its Kalshi probe filled one paper contract and reconciled exactly; venue alternation, the 365 ms Kalshi latency assumption and the one-contract rule operated as approved.
+- After two probes, all 12 sealed artifacts re-verified, both reconciliations were exact, SQLite integrity was `ok`, LaunchAgent reported 41 runs with last exit code 0, and stderr was empty. Final backup `state-20260802T031948951665Z.sqlite3` has SHA-256 `e08becfe110c1dcb67a49b237bca63efd88ccf101fadd65a5d997d1268fbadf9`.
+- Homebrew Python 3.11: 62 repository tests, compilation, JSON parsing, plist validation, whitespace checks and `m3.py check` passed before deployment.
+
+Findings closed during review:
+
+- **High:** the runtime response initially allowed reconciliation `status=ok` to overwrite probe `status=recorded`. Runtime, execution and reconciliation statuses are now distinct.
+- **High:** only successful probes initially fed the latency distribution. The decision latency is now persisted before the depth gate, preventing survivor bias from slow failures.
+- **High:** normalized books alone could hide an adapter mistake. Raw and normalized decision/execution books are now separately sealed and retained.
+- **High:** Polymarket's live market metadata reported fee coefficient 0.06 while the published base theta is 0.05. Runtime execution uses the approved 1.25x coefficient, 0.0625, and rejects a reported coefficient above that floor.
+- **High:** increasing probe size before every open position receives fresh executable marking could hide unrealized risk. M3.5 now enforces exactly one contract; larger probes require a separately approved marking expansion.
+
+Residual gates:
+
+- M3 has only begun its 168-hour/600-intent evidence gate and is not eligible for promotion.
+- Probe PnL measures execution friction and must not be presented as predictive alpha.
+- At most one sub-$1 probe position per venue can remain until that venue's next turn; M4 must isolate strategy positions before signals are added.
+- Polymarket US resting fills remain unverified without complete public trade evidence; M3.5 uses only marketable-limit probes.
+- Alert delivery remains local; remote notifications and the dashboard are future milestones.

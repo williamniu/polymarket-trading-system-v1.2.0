@@ -424,11 +424,11 @@ class M3Test(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "reconciliation failed"):
             m3.reconcile(self.connection)
 
-    def test_configuration_is_offline_paper_only(self):
+    def test_configuration_is_paper_shadow_only(self):
         self.assertEqual(m3.check_configuration(self.config, self.policy)["status"], "ok")
         changed = copy.deepcopy(self.config)
         changed["mode"] = "live"
-        with self.assertRaisesRegex(RuntimeError, "offline paper"):
+        with self.assertRaisesRegex(RuntimeError, "paper shadow"):
             m3.check_configuration(changed, self.policy)
         changed = copy.deepcopy(self.config)
         changed["venue_rules"]["kalshi"]["taker_theta"] = "0"
@@ -437,6 +437,10 @@ class M3Test(unittest.TestCase):
         changed = copy.deepcopy(self.config)
         changed["resting_queue_multiplier"] = "0.5"
         with self.assertRaisesRegex(RuntimeError, "queue multiplier"):
+            m3.check_configuration(changed, self.policy)
+        changed = copy.deepcopy(self.config)
+        changed["runtime_probe"]["quantity"] = "2"
+        with self.assertRaisesRegex(RuntimeError, "runtime probe"):
             m3.check_configuration(changed, self.policy)
 
     def test_m3_source_has_no_network_order_or_active_runtime_path(self):

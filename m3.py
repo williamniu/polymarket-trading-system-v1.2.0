@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/python3.11
-"""M3 deterministic, offline paper-execution engine."""
+"""M3 deterministic paper-execution engine."""
 
 import argparse
 import hashlib
@@ -1232,8 +1232,8 @@ def mark_to_market(connection, books, observed_at, config, policy):
 def check_configuration(config=None, policy=None):
     config = config or load_json(CONFIG_PATH)
     policy = policy or load_json(RISK_PATH)
-    if config.get("mode") != "offline_shadow" or policy.get("mode") != "paper":
-        raise RuntimeError("M3 configuration is not offline paper mode")
+    if config.get("mode") not in ("offline_shadow", "runtime_shadow") or policy.get("mode") != "paper":
+        raise RuntimeError("M3 configuration is not paper shadow mode")
     if not config.get("ignore_rebates") or config.get("products") != ["binary"]:
         raise RuntimeError("M3 scope or rebate boundary changed")
     if not ZERO < decimal(config["depth_credit_fraction"]) <= ONE:
@@ -1244,6 +1244,16 @@ def check_configuration(config=None, policy=None):
         raise RuntimeError("M3 fee stress is below published fees")
     if decimal(config["minimum_tick_size"]) < CENT:
         raise RuntimeError("M3 sub-cent execution is not implemented")
+    probe = config.get("runtime_probe", {})
+    quantity = decimal(probe.get("quantity"), "runtime probe quantity")
+    if (
+        not isinstance(probe.get("enabled"), bool)
+        or probe.get("outcome") not in ("yes", "no")
+        or quantity != ONE
+        or decimal(probe.get("minimum_top_quote_notional")) <= ZERO
+        or int(probe.get("minimum_time_to_close_minutes", 0)) <= 0
+    ):
+        raise RuntimeError("M3 runtime probe boundary is invalid")
     for venue, expected in EXPECTED_FEE_RULES.items():
         actual = config["venue_rules"].get(venue, {})
         if any(str(actual.get(key)) != value for key, value in expected.items()):
@@ -1261,7 +1271,7 @@ def main():
     parser.add_argument("command", choices=("check",))
     parser.parse_args()
     result = check_configuration()
-    print(json.dumps({"mode": "offline_shadow", **result}, sort_keys=True))
+    print(json.dumps({"mode": load_json(CONFIG_PATH)["mode"], **result}, sort_keys=True))
     return 0
 
 
