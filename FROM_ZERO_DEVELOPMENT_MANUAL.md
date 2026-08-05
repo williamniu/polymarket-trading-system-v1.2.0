@@ -74,6 +74,8 @@ Milestones may be implemented in parallel, but none may be promoted by bypassing
 - M3.5 runtime probes stay at one contract until every open position can be marked from fresh executable books each cycle.
 - Evidence-changing configuration edits are rejected after the M3 clock starts; the operational probe switch may always stop new probes.
 - Correctness repairs preserve the old evidence segment and start a fresh promotion window; historical rows and archived counters are never rewritten.
+- Every scheduled M3 cycle may record at most one independent fresh-book probe per configured venue; repeated orders from one book do not create additional evidence.
+- Promotion requires representative valid intents from every configured venue, not only a large aggregate count from the easiest venue.
 - Seven days, 600 paper intents and zero reconciliation errors are required before M3 promotion.
 
 ## Change control

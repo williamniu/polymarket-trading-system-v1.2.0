@@ -34,7 +34,7 @@ flowchart TD
 | M0 | The system cannot silently escape paper mode or relax approved risk | Established in code and tests | A bypass, mutable limit, credential path, or live endpoint |
 | M1 | At least one legal venue has sufficiently reliable, structured, executable public data | Collecting evidence | Insufficient uptime, samples, rules, quotes, depth, or account eligibility |
 | M2 | One Mac can preserve state and detect failure continuously | Deployed paper-only; scheduled evidence is accruing, while the seven-day runtime gate remains locked | Duplicate writer, stale heartbeat, corrupt state, unrecoverable restart, missed schedule |
-| M3 | Paper fills and position lifecycles resemble possible real outcomes | M3.6 exact-position resolution and sealed settlement run inside the existing M2 writer; segment 2 collects promotion evidence | Midpoint fills, optimistic queue, stranded positions, guessed settlements, or ignored fees/latency/depth |
+| M3 | Paper fills and position lifecycles resemble possible real outcomes | M3.7 attempts one independent paper probe per venue inside the existing M2 writer; segment 3 collects promotion evidence | Midpoint fills, optimistic queue, stranded positions, guessed settlements, ignored fees/latency/depth, or one venue hiding another |
 | M4 | A signal has incremental predictive value after costs | Not established | Look-ahead, selection bias, regime dependence, or negative out-of-sample value |
 | M5-M6 | The system can improve without grading or rewriting its own safety test | Not built | Self-promotion, test weakening, leakage, or failed rollback |
 | M7 | Small live capital can be operated legally and safely | Locked | Any missing prior gate or missing fresh approval |
@@ -46,6 +46,12 @@ M3 segment 1 proved that execution evidence could be recorded, but its broad-mar
 M3 now runs that counterfactual on public point-orderbook evidence. It automatically creates the smallest execution probe, but it still does not contain a predictive signal: buy/close probe PnL measures spread, latency, depth and fee friction only. The separate M3 clock cannot promote before 168 hours, 600 recorded intents and zero reconciliation errors.
 
 The post-M3.6 snapshot at `2026-08-02T22:44:12Z` is: M1 has 193 venue samples over 48.43 hours; M2 has 118 eligible runtime cycles over 29.48 hours; active M3 segment 2 has two valid intents, zero failed probes and zero reconciliation errors over 0.26 hours. Two natural LaunchAgent cycles recovered the two stale lifecycles, all 14 new evidence seals re-verified, SQLite integrity was `ok`, and M4 remained locked. These are reliability and execution-correctness facts, not a return claim.
+
+M3.7 increases evidence density without changing the M2 clock: the single M2 LaunchAgent still wakes every 15 minutes, but the one writer now attempts one fresh-book probe for each configured venue. Aggregate volume cannot hide a broken venue because every venue must independently contribute at least 250 valid intents. Segment 3 is the promotion boundary for this configuration; prior segments remain queryable history.
+
+The first natural M3.7 cycle was 460 at `2026-08-05T18:01:01Z`: it completed in 6.953 seconds, recorded one independent Polymarket US intent and one Kalshi intent, and reconciled both exactly. Segment 3 therefore began at `2026-08-05T18:01:08.247402Z` with two valid intents, zero failures and zero reconciliation errors. This establishes that dual-venue scheduling and accounting work in the live paper runtime; it still says nothing about predictive alpha or profitability.
+
+By cycle 464, segment 3 had nine valid intents and one visible Kalshi rejection for a non-two-sided book. Polymarket US still recorded its independent intent in that cycle, M2 remained healthy and reconciliation errors remained zero. In the knowledge graph, this is a useful execution-quality observation: rejecting non-executable evidence is correctness, not lost alpha.
 
 ## What changed from the previous work
 

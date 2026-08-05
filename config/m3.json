@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "mode": "runtime_shadow",
   "venues": [
     "polymarket_us",
@@ -50,6 +50,7 @@
   "promotion": {
     "duration_hours": 168,
     "minimum_order_intents": 600,
+    "minimum_order_intents_per_venue": 250,
     "maximum_reconciliation_errors": 0
   }
 }

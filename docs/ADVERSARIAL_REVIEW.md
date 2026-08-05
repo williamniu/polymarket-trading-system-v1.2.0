@@ -234,3 +234,42 @@ Residual gates:
 - Probe PnL remains execution-friction evidence, not predictive alpha.
 - Polymarket US resting fills remain unverified; runtime probes remain marketable-limit only.
 - Remote alert delivery and a user dashboard remain future milestones.
+
+## M3.7 dual-venue throughput and operations review
+
+Date: 2026-08-04
+
+Decision: **PASS for active paper-only M3.7 deployment and segment-3 evidence collection.** This increases execution-evidence density. It does not establish alpha, promote M3 or authorize live trading.
+
+Verified attacks:
+
+- Polymarket binary outcomes accept exactly one Yes and one No in either order, while duplicates, missing outcomes and identity changes still fail closed;
+- schema migration preserves every old probe and changes uniqueness only from one probe per cycle to one probe per cycle per venue;
+- one venue failure cannot stop the other venue or be overwritten by its success heartbeat;
+- every configured venue must independently contribute 250 valid intents, so one venue cannot brute-force the 600-intent gate;
+- both probes use separate official point books, evidence seals, order IDs and reconciliations;
+- the 900-second M2 schedule, one writer, one database, one-contract size and all execution conservatism remain unchanged;
+- M3 segment 2 is archived before configuration v3 starts segment 3.
+
+Pre-deployment evidence:
+
+- Homebrew Python 3.11: 70 repository tests, compilation and the isolated `m3.py check` passed.
+- Segment 2 was archived with 124 valid intents, 91 failed probes and zero reconciliation errors; no historical row was deleted.
+- Pre-change backup `state-20260805T045535152139Z.sqlite3` passed integrity check and has SHA-256 `59755fcf960bf9e436949fb44279897b2539c92dd4271f41363b43be6266a0f0`.
+- An isolated copy migrated to schema version 4 with `PRAGMA integrity_check = ok`, configuration version 3 and a null segment-3 evidence clock.
+- Isolated live-data cycle 409 recorded both Polymarket US and Kalshi intents in the same M2 cycle. All 12 probe seals re-verified and both cash/equity reconciliations were exact.
+
+Active deployment evidence:
+
+- Configuration version 3 and schema version 4 deployed with probes paused; M1/M2 continued while segment 2 was archived and segment 3 initialized with a null evidence clock.
+- Homebrew Python 3.11 passed all 70 repository tests, compilation, `m3.py check`, SQLite integrity and whitespace checks against the deployed source.
+- The first natural enabled LaunchAgent cycle was 460 at `2026-08-05T18:01:01Z`. It completed in 6.953 seconds and recorded distinct orders `m3-probe-460-polymarket_us` and `m3-probe-460-kalshi` under the `(cycle_id, venue)` uniqueness constraint.
+- Both one-contract paper orders filled from independent fresh public books and reconciled exactly. Each probe retained raw and normalized decision/execution books, the execution configuration and result; four independent latency observations were recorded.
+- Segment 3 started at `2026-08-05T18:01:08.247402Z` with two valid intents, one per venue, zero failures, zero pending probes, zero reconciliation errors and no account freeze. LaunchAgent reported 385 runs with last exit code 0 and process stderr was empty.
+- By natural cycle 464, segment 3 had nine valid intents and one explicit Kalshi failure because the point book was not two-sided. The same cycle still recorded its independent Polymarket US intent, while status retained the Kalshi error, M2 stayed healthy, reconciliation errors remained zero and the paper account did not freeze. This is the expected safe-failure behavior, not a fill to optimize away.
+- Post-deployment backup `state-20260805T182159449164Z.sqlite3` passed integrity check and has SHA-256 `7e037f58422dee79d17f619f725a6b61d84092726f6dbc1162c0056082cc7772`.
+
+Residual gates:
+
+- Segment 3 must independently reach 168 hours, 600 aggregate intents, at least 250 per venue and zero reconciliation errors.
+- Probe PnL remains execution-friction evidence, not predictive alpha.

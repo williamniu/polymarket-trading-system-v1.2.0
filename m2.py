@@ -25,10 +25,13 @@ LOCK_PATH = RUNTIME / "writer.lock"
 BACKUP_DIR = RUNTIME / "backups"
 IMPORT_DIR = RUNTIME / "imports"
 RAW_DIR = RUNTIME / "raw"
+STDOUT_LOG = RUNTIME / "collector.log"
+STDERR_LOG = RUNTIME / "collector-error.log"
 CONFIG_PATH = ROOT / "config" / "m2.json"
 RISK_PATH = ROOT / "config" / "risk-policy.json"
 M3_CONFIG_PATH = ROOT / "config" / "m3.json"
 POLYMARKET_MARKET_URL = "https://gateway.polymarket.us/v1/market/slug"
+SERVICE_LABEL = "com.williamniu.polymarket-m2"
 REQUIRED_VENUES = ("polymarket_us", "kalshi")
 
 
@@ -93,7 +96,7 @@ CREATE TABLE IF NOT EXISTS imported_cycles (
 M3_RUNTIME_SCHEMA = """
 CREATE TABLE IF NOT EXISTS m3_shadow_probes (
     probe_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cycle_id INTEGER NOT NULL UNIQUE REFERENCES cycles(cycle_id) ON DELETE CASCADE,
+    cycle_id INTEGER NOT NULL REFERENCES cycles(cycle_id) ON DELETE CASCADE,
     venue TEXT NOT NULL,
     market_id TEXT,
     status TEXT NOT NULL CHECK (status IN ('pending', 'recorded', 'failed', 'skipped')),
@@ -109,7 +112,8 @@ CREATE TABLE IF NOT EXISTS m3_shadow_probes (
     execution_config_json TEXT,
     result_json TEXT,
     error TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE(cycle_id, venue)
 );
 CREATE TABLE IF NOT EXISTS m3_latency_samples (
     sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -468,6 +472,39 @@ def m3_config_digest(config):
     return hashlib.sha256(m3.canonical_json(evidence_config).encode("utf-8")).hexdigest()
 
 
+def migrate_m3_probe_key(connection):
+    unique_indexes = []
+    for index in connection.execute("PRAGMA index_list(m3_shadow_probes)"):
+        if index["unique"]:
+            unique_indexes.append(
+                [
+                    column["name"]
+                    for column in connection.execute(
+                        f"PRAGMA index_info('{index['name']}')"
+                    )
+                ]
+            )
+    if ["cycle_id"] not in unique_indexes:
+        return False
+    columns = (
+        "probe_id, cycle_id, venue, market_id, status, order_id, decision_at, "
+        "request_latency_ms, effective_latency_ms, instrument_json, "
+        "decision_raw_json, decision_book_json, execution_raw_json, "
+        "execution_book_json, execution_config_json, result_json, error, created_at"
+    )
+    with connection:
+        connection.execute(
+            "ALTER TABLE m3_shadow_probes RENAME TO m3_shadow_probes_cycle_unique"
+        )
+        connection.executescript(M3_RUNTIME_SCHEMA)
+        connection.execute(
+            f"INSERT INTO m3_shadow_probes({columns}) "
+            f"SELECT {columns} FROM m3_shadow_probes_cycle_unique"
+        )
+        connection.execute("DROP TABLE m3_shadow_probes_cycle_unique")
+    return True
+
+
 def init_m3_runtime(connection, now=None):
     import m3
 
@@ -484,6 +521,7 @@ def init_m3_runtime(connection, now=None):
         ).fetchone()[0]
         if pending:
             raise RuntimeError("M3 has an incomplete prior probe")
+        migrate_m3_probe_key(connection)
         stored = connection.execute(
             "SELECT value FROM meta WHERE key = 'm3_config_sha256'"
         ).fetchone()
@@ -504,7 +542,7 @@ def init_m3_runtime(connection, now=None):
             "INSERT OR IGNORE INTO meta(key, value) VALUES ('m3_segment_start_probe_id', '1')"
         )
         connection.execute(
-            "UPDATE meta SET value = '3' WHERE key = 'schema_version'"
+            "UPDATE meta SET value = '4' WHERE key = 'schema_version'"
         )
     return config, policy
 
@@ -593,6 +631,15 @@ def m3_market_time_is_safe(value, now, minimum_minutes):
     return parsed is not None and (parsed - now).total_seconds() >= minimum_minutes * 60
 
 
+def m3_has_binary_outcomes(market):
+    outcomes = json.loads(market.get("outcomes", "null"))
+    return (
+        isinstance(outcomes, list)
+        and len(outcomes) == 2
+        and set(outcomes) == {"Yes", "No"}
+    )
+
+
 def m3_instrument_from_market(venue, market, now, config, closing=False):
     import m3
 
@@ -601,7 +648,6 @@ def m3_instrument_from_market(venue, market, now, config, closing=False):
     rule = config["venue_rules"][venue]
     try:
         if venue == "polymarket_us":
-            outcomes = json.loads(market.get("outcomes", "null"))
             question = str(market.get("question", "")).strip()
             category = str(market.get("category", "")).strip().lower()
             tick = m3.decimal(market.get("orderPriceMinTickSize"))
@@ -617,7 +663,7 @@ def m3_instrument_from_market(venue, market, now, config, closing=False):
                 market.get("active") is not True
                 or market.get("closed") is not False
                 or market.get("comboEnabled") is not False
-                or outcomes != ["Yes", "No"]
+                or not m3_has_binary_outcomes(market)
                 or not question
                 or not category
                 or tick < m3.decimal(config["minimum_tick_size"])
@@ -738,12 +784,14 @@ def validate_m3_position_market(position, market):
         if venue == "polymarket_us":
             question = str(market.get("question", "")).strip()
             category = str(market.get("category", "")).strip().lower()
-            outcomes = json.loads(market.get("outcomes", "null"))
             event_id = "polymarket_us:question:" + hashlib.sha256(
                 question.casefold().encode("utf-8")
             ).hexdigest()[:24]
             theme_id = f"polymarket_us:category:{category}"
-            valid_product = outcomes == ["Yes", "No"] and market.get("comboEnabled") is False
+            valid_product = (
+                m3_has_binary_outcomes(market)
+                and market.get("comboEnabled") is False
+            )
         else:
             event_id = str(market.get("event_ticker", "")).strip()
             theme_id = "kalshi:series:" + event_id.split("-", 1)[0].lower()
@@ -995,7 +1043,8 @@ def record_m3_probe_failure(connection, cycle_id, venue, message):
             """
             INSERT INTO m3_shadow_probes(cycle_id, venue, status, error, created_at)
             VALUES (?, ?, 'failed', ?, ?)
-            ON CONFLICT(cycle_id) DO UPDATE SET status = 'failed', error = excluded.error
+            ON CONFLICT(cycle_id, venue) DO UPDATE SET
+                status = 'failed', error = excluded.error
             """,
             (cycle_id, venue, message, now),
         )
@@ -1024,11 +1073,13 @@ def record_m3_probe_failure(connection, cycle_id, venue, message):
             )
 
 
-def run_m3_shadow_probe(connection, cycle_id, market_sink):
+def run_m3_shadow_probe(connection, cycle_id, market_sink, venue=None):
     import m3
 
     config, policy = init_m3_runtime(connection)
-    venue = next_m3_venue(connection, config)
+    venue = venue or next_m3_venue(connection, config)
+    if venue not in config["venues"]:
+        raise m3.EvidenceError("M3 probe venue is not configured")
     if not config["runtime_probe"].get("enabled"):
         with connection:
             connection.execute(
@@ -1155,13 +1206,14 @@ def run_m3_shadow_probe(connection, cycle_id, market_sink):
             UPDATE m3_shadow_probes
             SET status = 'recorded', execution_raw_json = ?, execution_book_json = ?,
                 result_json = ?, error = NULL
-            WHERE cycle_id = ? AND status = 'pending'
+            WHERE cycle_id = ? AND venue = ? AND status = 'pending'
             """,
             (
                 m3.canonical_json(execution_raw),
                 m3.canonical_json(execution_book),
                 m3.canonical_json(result),
                 cycle_id,
+                venue,
             ),
         )
         if finalized.rowcount != 1:
@@ -1234,6 +1286,36 @@ def m3_shadow_status(connection, now=None):
         "SELECT COUNT(*) FROM m3_shadow_probes WHERE probe_id >= ? AND status = 'failed'",
         (start_probe_id,),
     ).fetchone()[0]
+    venue_status = {}
+    for venue in config["venues"]:
+        counts = connection.execute(
+            """
+            SELECT
+                SUM(CASE WHEN probe.status = 'recorded' AND paper.order_id IS NOT NULL
+                         THEN 1 ELSE 0 END) AS intents,
+                SUM(CASE WHEN probe.status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                SUM(CASE WHEN probe.status = 'skipped' THEN 1 ELSE 0 END) AS skipped
+            FROM m3_shadow_probes AS probe
+            LEFT JOIN paper_orders AS paper ON paper.order_id = probe.order_id
+            WHERE probe.probe_id >= ? AND probe.venue = ?
+            """,
+            (start_probe_id, venue),
+        ).fetchone()
+        latest = connection.execute(
+            """
+            SELECT probe_id, cycle_id, status, order_id, error, created_at
+            FROM m3_shadow_probes
+            WHERE probe_id >= ? AND venue = ?
+            ORDER BY probe_id DESC LIMIT 1
+            """,
+            (start_probe_id, venue),
+        ).fetchone()
+        venue_status[venue] = {
+            "order_intent_count": counts["intents"] or 0,
+            "failed_probe_count": counts["failed"] or 0,
+            "skipped_probe_count": counts["skipped"] or 0,
+            "latest_probe": dict(latest) if latest else None,
+        }
     lifetime_intents = connection.execute(
         "SELECT COUNT(*) FROM m3_shadow_probes AS probe "
         "JOIN paper_orders AS paper ON paper.order_id = probe.order_id "
@@ -1257,10 +1339,16 @@ def m3_shadow_status(connection, now=None):
         "SELECT frozen FROM paper_accounts WHERE account_id = 'paper-v1'"
     ).fetchone()
     promotion = config["promotion"]
+    minimum_per_venue = promotion["minimum_order_intents_per_venue"]
+    venue_gate_passed = all(
+        item["order_intent_count"] >= minimum_per_venue
+        for item in venue_status.values()
+    )
     eligible = (
         started is not None
         and elapsed >= promotion["duration_hours"]
         and intents >= promotion["minimum_order_intents"]
+        and venue_gate_passed
         and reconciliation_errors <= promotion["maximum_reconciliation_errors"]
         and pending == 0
         and runtime_frozen is None
@@ -1274,6 +1362,8 @@ def m3_shadow_status(connection, now=None):
         "segment_start_probe_id": start_probe_id,
         "evidence_started_at": started["value"] if started else None,
         "elapsed_hours": round(elapsed, 3),
+        "configuration_version": config["version"],
+        "probes_per_cycle": len(config["venues"]),
         "order_intent_count": intents,
         "failed_probe_count": failed,
         "lifetime_order_intent_count": lifetime_intents,
@@ -1282,6 +1372,9 @@ def m3_shadow_status(connection, now=None):
         "reconciliation_error_count": reconciliation_errors,
         "runtime_frozen_at": runtime_frozen["value"] if runtime_frozen else None,
         "paper_account_frozen": bool(account and account["frozen"]),
+        "minimum_order_intents_per_venue": minimum_per_venue,
+        "venue_gate_passed": venue_gate_passed,
+        "venues": venue_status,
         "eligible_for_m3_promotion": eligible,
     }
 
@@ -1408,9 +1501,34 @@ def health(connection, now=None, free_disk_mb=None):
         and cycle_count >= config["minimum_cycles"]
         and elapsed_hours >= config["evidence_duration_hours"]
     )
+    last_cycle = None
+    if checks["database"]:
+        last = connection.execute(
+            "SELECT cycle_id, snapshot_at, started_at, finished_at, status "
+            "FROM cycles ORDER BY cycle_id DESC LIMIT 1"
+        ).fetchone()
+        if last:
+            last_cycle = dict(last)
+            last_cycle["duration_seconds"] = round(
+                (
+                    datetime.fromisoformat(last["finished_at"])
+                    - datetime.fromisoformat(last["started_at"])
+                ).total_seconds(),
+                3,
+            )
     return {
         "status": "ok" if healthy else "unhealthy",
+        "service": {
+            "label": SERVICE_LABEL,
+            "interval_seconds": config["interval_seconds"],
+            "expected_cycles_per_day": 86400 // config["interval_seconds"],
+            "database": str(DB_PATH),
+            "stdout_log": str(STDOUT_LOG),
+            "stderr_log": str(STDERR_LOG),
+        },
         "checks": checks,
+        "collector_heartbeat": dict(heartbeat) if heartbeat else None,
+        "last_cycle": last_cycle,
         "heartbeat_age_seconds": age_seconds,
         "free_disk_mb": round(free_disk_mb, 1),
         "cycle_count": cycle_count,
@@ -1439,22 +1557,47 @@ def run_cycle(start_evidence=False):
                 return 1
             m3_result = {"status": "not_requested"}
             if start_evidence:
-                venue = "unknown"
-                try:
-                    config = load_json(M3_CONFIG_PATH)
-                    if connection.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'm3_shadow_probes'"
-                    ).fetchone():
-                        venue = next_m3_venue(connection, config)
-                    m3_result = run_m3_shadow_probe(connection, cycle_id, market_sink)
-                except Exception as exc:
-                    message = f"{type(exc).__name__}: {exc}"
+                config = load_json(M3_CONFIG_PATH)
+                m3_result = {}
+                for venue in config["venues"]:
                     try:
-                        connection.executescript(M3_RUNTIME_SCHEMA)
-                        record_m3_probe_failure(connection, cycle_id, venue, message)
-                    except sqlite3.DatabaseError:
-                        pass
-                    m3_result = {"status": "failed", "venue": venue, "error": message}
+                        m3_result[venue] = run_m3_shadow_probe(
+                            connection, cycle_id, market_sink, venue
+                        )
+                    except Exception as exc:
+                        message = f"{type(exc).__name__}: {exc}"
+                        try:
+                            connection.executescript(M3_RUNTIME_SCHEMA)
+                            record_m3_probe_failure(connection, cycle_id, venue, message)
+                        except sqlite3.DatabaseError:
+                            pass
+                        m3_result[venue] = {
+                            "status": "failed",
+                            "venue": venue,
+                            "error": message,
+                        }
+                m3_failed = any(
+                    result["status"] == "failed" for result in m3_result.values()
+                )
+                with connection:
+                    connection.execute(
+                        """
+                        INSERT INTO heartbeats(component, observed_at, status, detail)
+                        VALUES ('m3_shadow', ?, ?, ?)
+                        ON CONFLICT(component) DO UPDATE SET
+                            observed_at = excluded.observed_at,
+                            status = excluded.status,
+                            detail = excluded.detail
+                        """,
+                        (
+                            utc_now().isoformat(),
+                            "failed" if m3_failed else "ok",
+                            json.dumps(
+                                {venue: result["status"] for venue, result in m3_result.items()},
+                                sort_keys=True,
+                            ),
+                        ),
+                    )
     print(
         json.dumps(
             {

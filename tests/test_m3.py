@@ -463,6 +463,10 @@ class M3Test(unittest.TestCase):
         changed["runtime_probe"]["quantity"] = "2"
         with self.assertRaisesRegex(RuntimeError, "runtime probe"):
             m3.check_configuration(changed, self.policy)
+        changed = copy.deepcopy(self.config)
+        changed["promotion"]["minimum_order_intents_per_venue"] = 301
+        with self.assertRaisesRegex(RuntimeError, "promotion boundary"):
+            m3.check_configuration(changed, self.policy)
 
     def test_m3_source_has_no_network_order_or_active_runtime_path(self):
         source = (ROOT / "m3.py").read_text(encoding="utf-8")

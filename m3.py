@@ -1264,6 +1264,16 @@ def check_configuration(config=None, policy=None):
         raise RuntimeError("M3 fee stress is below published fees")
     if decimal(config["minimum_tick_size"]) < CENT:
         raise RuntimeError("M3 sub-cent execution is not implemented")
+    promotion = config.get("promotion", {})
+    minimum_total = int(promotion.get("minimum_order_intents", 0))
+    minimum_per_venue = int(promotion.get("minimum_order_intents_per_venue", 0))
+    if (
+        int(promotion.get("duration_hours", 0)) <= 0
+        or minimum_per_venue <= 0
+        or minimum_total < minimum_per_venue * len(config.get("venues", []))
+        or int(promotion.get("maximum_reconciliation_errors", -1)) != 0
+    ):
+        raise RuntimeError("M3 promotion boundary is invalid")
     probe = config.get("runtime_probe", {})
     quantity = decimal(probe.get("quantity"), "runtime probe quantity")
     if (

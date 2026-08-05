@@ -253,6 +253,53 @@ class M2Test(unittest.TestCase):
         self.assertTrue(plist["StandardErrorPath"].endswith("runtime/m2/collector-error.log"))
         self.assertNotIn("KeepAlive", plist)
 
+    def test_m3_probe_schema_migration_preserves_rows_and_allows_two_venues(self):
+        now = datetime.now(timezone.utc)
+        with self.connection() as connection:
+            cycle_id, _ = m2.record_snapshot(
+                connection, self.snapshot(now), now, now, free_disk_mb=5000
+            )
+            connection.execute(
+                """
+                CREATE TABLE m3_shadow_probes (
+                    probe_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cycle_id INTEGER NOT NULL UNIQUE REFERENCES cycles(cycle_id),
+                    venue TEXT NOT NULL, market_id TEXT, status TEXT NOT NULL,
+                    order_id TEXT UNIQUE, decision_at TEXT, request_latency_ms REAL,
+                    effective_latency_ms INTEGER, instrument_json TEXT,
+                    decision_raw_json TEXT, decision_book_json TEXT,
+                    execution_raw_json TEXT, execution_book_json TEXT,
+                    execution_config_json TEXT, result_json TEXT, error TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO m3_shadow_probes(cycle_id, venue, status, error, created_at) "
+                "VALUES (?, 'polymarket_us', 'failed', 'old failure', ?)",
+                (cycle_id, now.isoformat()),
+            )
+            m2.init_m3_runtime(connection, now)
+            connection.execute(
+                "INSERT INTO m3_shadow_probes(cycle_id, venue, status, created_at) "
+                "VALUES (?, 'kalshi', 'skipped', ?)",
+                (cycle_id, now.isoformat()),
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO m3_shadow_probes(cycle_id, venue, status, created_at) "
+                    "VALUES (?, 'kalshi', 'skipped', ?)",
+                    (cycle_id, now.isoformat()),
+                )
+            rows = connection.execute(
+                "SELECT venue, status FROM m3_shadow_probes ORDER BY venue"
+            ).fetchall()
+            schema_version = connection.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()["value"]
+        self.assertEqual([tuple(row) for row in rows], [("kalshi", "skipped"), ("polymarket_us", "failed")])
+        self.assertEqual(schema_version, "4")
+
     def test_m3_runtime_probe_records_sealed_evidence_and_stressed_fees(self):
         now = datetime.now(timezone.utc)
         market = self.polymarket(now)
@@ -334,6 +381,7 @@ class M2Test(unittest.TestCase):
         market = self.polymarket(now)
         with self.connection() as connection:
             self.record_m3_position(connection, "polymarket_us", market, now)
+            market["outcomes"] = '["No","Yes"]'
             market["endDate"] = (now + timedelta(minutes=1)).isoformat()
             cycle_id, _ = m2.record_snapshot(
                 connection, self.snapshot(now), now, now, free_disk_mb=5000
@@ -536,6 +584,9 @@ class M2Test(unittest.TestCase):
             self.assertEqual(status["segment_number"], 2)
             self.assertEqual(status["order_intent_count"], 0)
             self.assertEqual(status["lifetime_order_intent_count"], 1)
+            self.assertFalse(status["venue_gate_passed"])
+            self.assertEqual(status["venues"]["polymarket_us"]["order_intent_count"], 0)
+            self.assertEqual(status["venues"]["kalshi"]["order_intent_count"], 0)
             self.assertIsNone(status["evidence_started_at"])
 
     def test_m3_latency_is_empirical_p95_plus_buffer(self):
@@ -616,6 +667,11 @@ class M2Test(unittest.TestCase):
         config = json.loads((ROOT / "config" / "m3.json").read_text(encoding="utf-8"))
         market = self.polymarket(now)
         self.assertIsNotNone(m2.m3_instrument_from_market("polymarket_us", market, now, config))
+        market["outcomes"] = '["No","Yes"]'
+        self.assertIsNotNone(m2.m3_instrument_from_market("polymarket_us", market, now, config))
+        market["outcomes"] = '["Yes","Yes"]'
+        self.assertIsNone(m2.m3_instrument_from_market("polymarket_us", market, now, config))
+        market = self.polymarket(now)
         market["feeCoefficient"] = 0.07
         self.assertIsNone(m2.m3_instrument_from_market("polymarket_us", market, now, config))
         market = self.polymarket(now)
@@ -673,11 +729,49 @@ class M2Test(unittest.TestCase):
                 "failed",
             )
             self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM m3_shadow_probes").fetchone()[0],
+                2,
+            )
+            self.assertEqual(
                 connection.execute(
                     "SELECT code FROM alerts WHERE code = 'm3_probe_failure'"
                 ).fetchone()[0],
                 "m3_probe_failure",
             )
+
+    def test_m3_runs_both_venues_and_one_failure_does_not_hide_or_stop_the_other(self):
+        now = datetime.now(timezone.utc)
+        with self.connection() as connection:
+            m2.init_m3_runtime(connection, now)
+        snapshot = self.snapshot(now)
+
+        def collection(**kwargs):
+            kwargs["market_sink"].update({"polymarket_us": [], "kalshi": []})
+            return snapshot
+
+        seen = []
+
+        def probe(_connection, _cycle_id, _market_sink, venue):
+            seen.append(venue)
+            if venue == "polymarket_us":
+                raise m3.EvidenceError("bad metadata")
+            return {"status": "recorded", "venue": venue}
+
+        output = StringIO()
+        with patch.object(m2.m1, "collect_snapshot", side_effect=collection), patch.object(
+            m2, "run_m3_shadow_probe", side_effect=probe
+        ), redirect_stdout(output):
+            self.assertEqual(m2.run_cycle(start_evidence=True), 0)
+        payload = json.loads(output.getvalue())
+        with m2.connect(self.db_path) as connection:
+            heartbeat = connection.execute(
+                "SELECT status, detail FROM heartbeats WHERE component = 'm3_shadow'"
+            ).fetchone()
+        self.assertEqual(seen, ["polymarket_us", "kalshi"])
+        self.assertEqual(payload["m3_shadow"]["polymarket_us"]["status"], "failed")
+        self.assertEqual(payload["m3_shadow"]["kalshi"]["status"], "recorded")
+        self.assertEqual(heartbeat["status"], "failed")
+        self.assertIn('"kalshi": "recorded"', heartbeat["detail"])
 
     def test_m3_reconciliation_failure_freezes_only_m3(self):
         now = datetime.now(timezone.utc)

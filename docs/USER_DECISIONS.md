@@ -77,6 +77,21 @@ The user approved this repair on 2026-08-02 after 30 probe failures exposed a mi
 
 Future evidence-segment resets remain approval-gated. The `m3-new-segment` command is not an autonomous strategy control and fails unless the runtime probe is paused first.
 
+## Approved M3.7 throughput configuration version 3
+
+The user approved higher M3 paper-intent density on 2026-08-04. M3 remains an execution-realism laboratory, not an alpha strategy. M1/M2 keep the approved 15-minute schedule; only M3 changes from alternating venues to one independent probe per configured venue per cycle.
+
+| Approved behavior | Current value | User control and consequence |
+|---|---:|---|
+| Probes per M2 cycle | Two: one Polymarket US and one Kalshi | Adding venues or more than one probe per venue requires fresh independent books, approval and a new M3 segment |
+| M2 interval | 900 seconds | Unchanged; changing it would alter the M2 operating load and require a separate evidence decision |
+| Probe quantity | One contract | Unchanged; larger size requires a new risk/executable-marking review |
+| Aggregate promotion intents | 600 | User-editable with approval and a new M3 segment |
+| Minimum valid intents per venue | 250 | Prevents one venue from brute-forcing the aggregate gate; user-editable with approval and a new M3 segment |
+| Duration and reconciliation | 168 hours; zero errors | Unchanged |
+
+Segment 2 is immutable diagnostic history. Configuration v3 starts segment 3 after the Polymarket binary-outcome ordering repair. The repair accepts exactly one Yes and one No in either order; it does not weaken product, market, event or theme identity checks.
+
 ## Boundaries that are not preference knobs
 
 - No look-ahead or favorable selection among later books.
