@@ -8,7 +8,7 @@ A paper-only research system designed to become more reliable through measured f
 - **M2 paper infrastructure is deployed and mechanically promotion-eligible.** It remains active while formal review is pending.
 - M2 uses one SQLite source of truth, heartbeats, health checks, alerts, backups, evidence migration, and a $5,000 simulated account baseline.
 - **M3.7 paper shadow execution is connected to the existing M2 service.** Each scheduled cycle runs one-contract public-data probes for both venues, resolves open positions through exact public market endpoints, seals official settlements, and keeps promotion evidence in immutable segments.
-- **M4.1-A2 offline candidate auditing is implemented.** A version-2 audit examined 50 recurring wallets and again produced two mechanical candidates. Manual review retains Betwick only as a conditional observation lead; the anonymous index wallet is not eligible for an explainable expert cohort. There is still no cohort or signal integration.
+- **M4.1-B exact-market peer discovery is implemented offline.** Starting from Betwick's target-market actions, configuration v3 found 65 mechanical peers for manual review. Kekkone is the strongest new observation lead; PhilIvey9 is a useful synchronous-follower control, not an independent expert. No cohort, signal or runtime integration exists yet.
 - M3 probe PnL is execution-friction evidence, and M4 candidates are leads rather than experts. Neither is a profitability claim.
 - There is no credential loading, signing, order submission, deposit, withdrawal, or live-trading code.
 - Market making, latency arbitrage, and maker-rebate capture are prohibited as primary alpha sources.
@@ -61,12 +61,14 @@ See `docs/MENTAL_MODEL.md` for the project knowledge graph and the distinction b
 
 The safe operational stop is `runtime_probe.enabled` in `config/m3.json`. `m3-new-segment` is an approval-gated maintenance command that requires this switch to be disabled and archives the prior counters without rewriting its rows. M3 configuration v3 runs both venues per 15-minute M2 cycle and requires at least 250 valid intents per venue as part of the unchanged 168-hour/600-intent gate. See `docs/USER_DECISIONS.md` for the complete user-editable control surface.
 
-## M4.1-A2 read-only commands
+## M4.1-A2/B read-only commands
 
 ```bash
 /opt/homebrew/bin/python3.11 m4.py check
 /opt/homebrew/bin/python3.11 m4.py audit
 /opt/homebrew/bin/python3.11 m4.py status
+/opt/homebrew/bin/python3.11 m4.py peers
+/opt/homebrew/bin/python3.11 m4.py peer-status
 ```
 
-`audit` reads only official public leaderboard, trade, closed-position and profile endpoints. It writes raw compressed evidence and a human-readable report under ignored `runtime/m2/research/m4/`; it never opens the operational SQLite database. `status` displays the latest report. A passing screen means only “candidate for manual observation,” never “expert” or “alpha.”
+`audit` reads public leaderboard, trade, closed-position and profile endpoints. `peers` finds wallets acting in the same direction on the exact same `conditionId` within six hours of a reference action. It has no price or time-to-resolution admission gate; the $100 net-directional-notional floor removes dust and offsetting churn and is not a probability-price threshold. Both commands write a compressed source artifact plus separate content and file SHA-256 values under ignored `runtime/m2/research/m4/`; neither opens SQLite. A match means only “candidate for manual observation,” never “independent expert” or “alpha.”

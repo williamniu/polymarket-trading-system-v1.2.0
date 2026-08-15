@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "mode": "candidate_audit",
   "paper_only": true,
   "source": "polymarket_public_data",
@@ -26,6 +26,18 @@
   "extreme_price_low": 0.1,
   "extreme_price_high": 0.9,
   "request_timeout_seconds": 20,
+  "peer_discovery": {
+    "reference_wallets": [
+      "0xc851cd9bee7d262afd78674f861f9f576a12cd2a"
+    ],
+    "lookback_days": 90,
+    "minimum_shared_target_markets": 3,
+    "consensus_window_hours": 6,
+    "reference_trade_limit": 10000,
+    "market_trade_limit": 10000,
+    "maximum_candidates_to_review": 20,
+    "required_independent_experts": 3
+  },
   "gates": {
     "minimum_closed_positions": 30,
     "minimum_target_trade_notional_fraction": 0.5,

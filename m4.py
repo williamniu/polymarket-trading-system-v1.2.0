@@ -18,9 +18,11 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config" / "m4.json"
 RUNTIME = ROOT / "runtime" / "m2" / "research" / "m4"
 LATEST_REPORT_PATH = RUNTIME / "candidate-audit-latest.json"
+LATEST_PEER_REPORT_PATH = RUNTIME / "peer-discovery-latest.json"
 DATA_API = "https://data-api.polymarket.com"
 PROFILE_API = "https://gamma-api.polymarket.com/public-profile"
 WALLET_PATTERN = re.compile(r"^0x[a-f0-9]{40}$")
+CONDITION_PATTERN = re.compile(r"^0x[a-f0-9]{64}$")
 
 
 def utc_now():
@@ -37,6 +39,14 @@ def canonical_json(payload):
 
 def content_hash(payload):
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def file_hash(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def number(value):
@@ -108,6 +118,41 @@ def validate_config(config):
         raise ValueError("M4.1-A gates are incomplete or unknown")
     if config["observation_pool_limit"] > config["maximum_candidates_to_audit"]:
         raise ValueError("observation_pool_limit cannot exceed audited candidates")
+    peer = config.get("peer_discovery")
+    required_peer_keys = {
+        "reference_wallets",
+        "lookback_days",
+        "minimum_shared_target_markets",
+        "consensus_window_hours",
+        "reference_trade_limit",
+        "market_trade_limit",
+        "maximum_candidates_to_review",
+        "required_independent_experts",
+    }
+    if not isinstance(peer, dict) or set(peer) != required_peer_keys:
+        raise ValueError("M4.1-B peer discovery configuration is incomplete or unknown")
+    wallets = peer["reference_wallets"]
+    if (
+        not isinstance(wallets, list)
+        or not wallets
+        or len(wallets) > 10
+        or any(not isinstance(wallet, str) or not WALLET_PATTERN.fullmatch(wallet) for wallet in wallets)
+        or len(set(wallets)) != len(wallets)
+    ):
+        raise ValueError("peer discovery reference wallets are invalid")
+    peer_integer_ranges = {
+        "lookback_days": (1, 3650),
+        "minimum_shared_target_markets": (1, 1000),
+        "consensus_window_hours": (1, 168),
+        "reference_trade_limit": (1, 10000),
+        "market_trade_limit": (1, 10000),
+        "maximum_candidates_to_review": (1, 100),
+        "required_independent_experts": (2, 10),
+    }
+    for key, (minimum, maximum) in peer_integer_ranges.items():
+        value = peer.get(key)
+        if not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValueError(f"peer_discovery.{key} must be from {minimum} to {maximum}")
     for key in ("target_terms", "excluded_terms"):
         values = config.get(key)
         if not isinstance(values, list) or not values or any(
@@ -304,6 +349,228 @@ def classify_title(title, config):
 def term_matches(text, term):
     phrase = term.strip()
     return bool(re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", text))
+
+
+def directional_actions(trades, config, start_timestamp=0, target_only=False):
+    rows_by_wallet_market = defaultdict(list)
+    window_seconds = config["aggregation_window_minutes"] * 60
+    for trade in trades or []:
+        if not isinstance(trade, dict):
+            continue
+        wallet = str(trade.get("proxyWallet") or "").lower()
+        condition = str(trade.get("conditionId") or "").lower()
+        side = str(trade.get("side") or "").upper()
+        outcome_index = number(trade.get("outcomeIndex"))
+        price, size, timestamp = (
+            number(trade.get("price")),
+            number(trade.get("size")),
+            number(trade.get("timestamp")),
+        )
+        title = str(trade.get("title") or "")
+        if (
+            not WALLET_PATTERN.fullmatch(wallet)
+            or not CONDITION_PATTERN.fullmatch(condition)
+            or side not in ("BUY", "SELL")
+            or outcome_index not in (0, 1)
+            or price is None
+            or size is None
+            or timestamp is None
+            or not 0 <= price <= 1
+            or size <= 0
+            or timestamp < start_timestamp
+            or (target_only and classify_title(title, config) != "target")
+        ):
+            continue
+        direction = (1 if side == "BUY" else -1) * (
+            1 if int(outcome_index) == 0 else -1
+        )
+        rows_by_wallet_market[(wallet, condition)].append(
+            {
+                "timestamp": int(timestamp),
+                "direction": direction,
+                "size": size,
+                "notional": price * size,
+                "price": price,
+                "title": title,
+                "event_slug": trade.get("eventSlug"),
+                "name": trade.get("name"),
+                "pseudonym": trade.get("pseudonym"),
+                "transaction_hash": trade.get("transactionHash"),
+            }
+        )
+
+    actions = []
+    for (wallet, condition), rows in rows_by_wallet_market.items():
+        rows.sort(key=lambda item: item["timestamp"])
+        bucket, bucket_start = [], None
+        for row in rows:
+            if bucket_start is None or row["timestamp"] - bucket_start < window_seconds:
+                bucket.append(row)
+                bucket_start = row["timestamp"] if bucket_start is None else bucket_start
+            else:
+                actions.append((wallet, condition, bucket))
+                bucket, bucket_start = [row], row["timestamp"]
+        if bucket:
+            actions.append((wallet, condition, bucket))
+
+    result = []
+    for wallet, condition, bucket in actions:
+        gross_notional = sum(row["notional"] for row in bucket)
+        total_contracts = sum(row["size"] for row in bucket)
+        net_contracts = sum(row["direction"] * row["size"] for row in bucket)
+        average_observed_price = gross_notional / total_contracts
+        net_directional_notional = abs(net_contracts) * average_observed_price
+        if net_directional_notional < config["minimum_material_notional_usd"]:
+            continue
+        result.append(
+            {
+                "wallet": wallet,
+                "condition_id": condition,
+                "event_slug": next(
+                    (row["event_slug"] for row in bucket if row["event_slug"]), None
+                ),
+                "title": next((row["title"] for row in bucket if row["title"]), None),
+                "name": next((row["name"] for row in bucket if row["name"]), None),
+                "pseudonym": next(
+                    (row["pseudonym"] for row in bucket if row["pseudonym"]), None
+                ),
+                "started_at": bucket[0]["timestamp"],
+                "ended_at": bucket[-1]["timestamp"],
+                "direction_outcome_index": 0 if net_contracts > 0 else 1,
+                "gross_notional_usd": rounded(gross_notional),
+                "net_directional_notional_usd": rounded(net_directional_notional),
+                "net_contracts": rounded(abs(net_contracts)),
+                "minimum_observed_price": rounded(min(row["price"] for row in bucket)),
+                "maximum_observed_price": rounded(max(row["price"] for row in bucket)),
+                "source_trade_count": len(bucket),
+            }
+        )
+    return result
+
+
+def match_peer_actions(reference_actions, market_actions, config):
+    peer_config = config["peer_discovery"]
+    reference_wallets = set(peer_config["reference_wallets"])
+    window_seconds = peer_config["consensus_window_hours"] * 3600
+    references_by_market = defaultdict(list)
+    for action in reference_actions:
+        references_by_market[action["condition_id"]].append(action)
+
+    peers = {}
+    for action in market_actions:
+        if action["wallet"] in reference_wallets:
+            continue
+        references = [
+            reference
+            for reference in references_by_market[action["condition_id"]]
+            if reference["direction_outcome_index"]
+            == action["direction_outcome_index"]
+            and abs(reference["started_at"] - action["started_at"]) <= window_seconds
+        ]
+        if not references:
+            continue
+        reference = min(
+            references,
+            key=lambda item: abs(item["started_at"] - action["started_at"]),
+        )
+        peer = peers.setdefault(
+            action["wallet"],
+            {
+                "wallet": action["wallet"],
+                "user_name": action["name"],
+                "pseudonym": action["pseudonym"],
+                "markets": {},
+                "matching_action_count": 0,
+                "matched_gross_notional_usd": 0.0,
+                "matched_net_directional_notional_usd": 0.0,
+                "absolute_time_deltas_seconds": [],
+                "signed_time_deltas_seconds": [],
+            },
+        )
+        peer["user_name"] = action["name"] or peer["user_name"]
+        peer["pseudonym"] = action["pseudonym"] or peer["pseudonym"]
+        peer["matching_action_count"] += 1
+        peer["matched_gross_notional_usd"] += action["gross_notional_usd"]
+        peer["matched_net_directional_notional_usd"] += action[
+            "net_directional_notional_usd"
+        ]
+        signed_delta = action["started_at"] - reference["started_at"]
+        delta = abs(signed_delta)
+        peer["absolute_time_deltas_seconds"].append(delta)
+        peer["signed_time_deltas_seconds"].append(signed_delta)
+        market = peer["markets"].setdefault(
+            action["condition_id"],
+            {
+                "condition_id": action["condition_id"],
+                "event_slug": action["event_slug"],
+                "title": action["title"],
+                "matching_action_count": 0,
+                "first_peer_action_at": action["started_at"],
+                "last_peer_action_at": action["started_at"],
+                "minimum_time_delta_seconds": delta,
+                "reference_wallets": set(),
+            },
+        )
+        market["matching_action_count"] += 1
+        market["first_peer_action_at"] = min(
+            market["first_peer_action_at"], action["started_at"]
+        )
+        market["last_peer_action_at"] = max(
+            market["last_peer_action_at"], action["started_at"]
+        )
+        market["minimum_time_delta_seconds"] = min(
+            market["minimum_time_delta_seconds"], delta
+        )
+        market["reference_wallets"].add(reference["wallet"])
+
+    candidates = []
+    for peer in peers.values():
+        if len(peer["markets"]) < peer_config["minimum_shared_target_markets"]:
+            continue
+        markets = []
+        for market in peer.pop("markets").values():
+            market["reference_wallets"] = sorted(market["reference_wallets"])
+            markets.append(market)
+        markets.sort(key=lambda item: item["condition_id"])
+        deltas = peer.pop("absolute_time_deltas_seconds")
+        signed_deltas = peer.pop("signed_time_deltas_seconds")
+        peer["shared_target_market_count"] = len(markets)
+        peer["matched_gross_notional_usd"] = rounded(
+            peer["matched_gross_notional_usd"]
+        )
+        peer["matched_net_directional_notional_usd"] = rounded(
+            peer["matched_net_directional_notional_usd"]
+        )
+        peer["median_absolute_time_delta_seconds"] = rounded(statistics.median(deltas))
+        peer["median_signed_time_delta_seconds"] = rounded(
+            statistics.median(signed_deltas)
+        )
+        peer["within_one_minute_match_count"] = sum(
+            abs(delta) <= 60 for delta in signed_deltas
+        )
+        peer["peer_action_after_reference_count"] = sum(
+            delta > 0 for delta in signed_deltas
+        )
+        peer["peer_action_before_reference_count"] = sum(
+            delta < 0 for delta in signed_deltas
+        )
+        peer["same_second_match_count"] = sum(delta == 0 for delta in signed_deltas)
+        peer["synchronous_follower_warning"] = (
+            len(signed_deltas) >= 3
+            and peer["within_one_minute_match_count"] / len(signed_deltas) >= 0.8
+            and peer["peer_action_after_reference_count"] / len(signed_deltas) >= 0.8
+        )
+        peer["markets"] = markets
+        candidates.append(peer)
+    candidates.sort(
+        key=lambda item: (
+            -item["shared_target_market_count"],
+            -item["matching_action_count"],
+            -item["matched_net_directional_notional_usd"],
+            item["wallet"],
+        )
+    )
+    return candidates
 
 
 def trade_metrics(trades, config):
@@ -586,12 +853,301 @@ def write_artifacts(raw, report, observed_at):
     stamp = observed_at.strftime("%Y%m%dT%H%M%S%fZ")
     raw_path = RUNTIME / f"candidate-sources-{stamp}.json.gz"
     report_path = RUNTIME / f"candidate-audit-{stamp}.json"
-    raw_hash = content_hash(raw)
-    report = {**report, "raw_evidence_sha256": raw_hash, "raw_evidence_path": str(raw_path)}
     m1.atomic_json(raw_path, raw, compress=True)
+    report = {
+        **report,
+        "raw_evidence_content_sha256": content_hash(raw),
+        "raw_evidence_file_sha256": file_hash(raw_path),
+        "raw_evidence_path": str(raw_path),
+    }
     m1.atomic_json(report_path, report)
     m1.atomic_json(LATEST_REPORT_PATH, report)
     return report_path, raw_path, report
+
+
+def fetch_peer_sources(config, observed_at):
+    peer_config = config["peer_discovery"]
+    start = int(
+        (observed_at - timedelta(days=peer_config["lookback_days"])).timestamp()
+    )
+    end = int(observed_at.timestamp())
+    reference_sources = {}
+
+    def fetch_reference(wallet):
+        url = api_url(
+            f"{DATA_API}/trades",
+            {
+                "user": wallet,
+                "start": start,
+                "end": end,
+                "limit": peer_config["reference_trade_limit"],
+                "takerOnly": "false",
+            },
+        )
+        payload = fetch_json(url, config["request_timeout_seconds"])
+        if not isinstance(payload, list):
+            raise ValueError("reference trade response is not a list")
+        return wallet, {"url": url, "trades": payload, "error": None}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {
+            pool.submit(fetch_reference, wallet): wallet
+            for wallet in peer_config["reference_wallets"]
+        }
+        for future, wallet in futures.items():
+            try:
+                name, source = future.result()
+                reference_sources[name] = source
+            except Exception as exc:
+                reference_sources[wallet] = {
+                    "url": None,
+                    "trades": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+
+    reference_rows = [
+        row
+        for source in reference_sources.values()
+        for row in (source.get("trades") or [])
+    ]
+    reference_actions = directional_actions(
+        reference_rows, config, start_timestamp=start, target_only=True
+    )
+    conditions = sorted({action["condition_id"] for action in reference_actions})
+    market_sources = {}
+
+    def fetch_market(condition):
+        url = api_url(
+            f"{DATA_API}/trades",
+            {
+                "market": condition,
+                "start": start,
+                "end": end,
+                "limit": peer_config["market_trade_limit"],
+                "takerOnly": "false",
+            },
+        )
+        payload = fetch_json(url, config["request_timeout_seconds"])
+        if not isinstance(payload, list):
+            raise ValueError("market trade response is not a list")
+        return condition, {"url": url, "trades": payload, "error": None}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {
+            pool.submit(fetch_market, condition): condition for condition in conditions
+        }
+        for future, condition in futures.items():
+            try:
+                name, source = future.result()
+                market_sources[name] = source
+            except Exception as exc:
+                market_sources[condition] = {
+                    "url": None,
+                    "trades": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+    return start, reference_sources, reference_actions, market_sources
+
+
+def summarize_peer_profile(wallet, source):
+    profile = source.get("profile") if isinstance(source, dict) else None
+    profile = profile if isinstance(profile, dict) else {}
+    name = profile.get("name")
+    x_username = profile.get("xUsername")
+    readable_name = bool(name and not re.fullmatch(r"0x[a-fA-F0-9]{40}(?:-\d+)?", name))
+    identity_status = (
+        "public_x" if x_username else "named_profile" if readable_name else "wallet_only"
+    )
+    return {
+        "name": name,
+        "pseudonym": profile.get("pseudonym"),
+        "x_username": x_username,
+        "verified_badge": bool(profile.get("verifiedBadge")),
+        "profile_created_at": profile.get("createdAt"),
+        "identity_status": identity_status,
+        "profile_error": (
+            source.get("errors", {}).get("profile") or source.get("error")
+            if isinstance(source, dict)
+            else "missing"
+        ),
+        "identity_note": "Public identity is evidence for review, not proof of a distinct beneficial owner.",
+        "wallet": wallet,
+    }
+
+
+def build_peer_report(raw, candidates, config, observed_at):
+    peer_config = config["peer_discovery"]
+    reference_errors = {
+        wallet: source["error"]
+        for wallet, source in raw["reference_sources"].items()
+        if source.get("error")
+    }
+    market_errors = {
+        condition: source["error"]
+        for condition, source in raw["market_sources"].items()
+        if source.get("error")
+    }
+    reference_limit_hits = sum(
+        len(source.get("trades") or []) >= peer_config["reference_trade_limit"]
+        for source in raw["reference_sources"].values()
+    )
+    market_limit_hits = sum(
+        len(source.get("trades") or []) >= peer_config["market_trade_limit"]
+        for source in raw["market_sources"].values()
+    )
+    review = []
+    for candidate in candidates[: peer_config["maximum_candidates_to_review"]]:
+        evidence = raw["candidate_evidence"].get(candidate["wallet"], {})
+        profile = summarize_peer_profile(candidate["wallet"], evidence)
+        trades = trade_metrics(evidence.get("trades"), config)
+        closed = closed_position_metrics(evidence.get("closed_positions"), config)
+        warnings = []
+        if candidate.get("synchronous_follower_warning"):
+            warnings.append(
+                "at least eighty percent of matches follow the reference within one minute"
+            )
+        if profile["identity_status"] == "wallet_only":
+            warnings.append("wallet-only identity")
+        if trades["sample_limit_reached"]:
+            warnings.append("recent trade sample is truncated")
+        if closed["sample_limit_reached"]:
+            warnings.append("closed-position sample is truncated")
+        if (trades["target_trade_notional_fraction"] or 0) < 0.5:
+            warnings.append("less than half of sampled trade notional is in the target domain")
+        if (trades["excluded_trade_notional_fraction"] or 0) > 0.1:
+            warnings.append("more than ten percent of sampled trade notional is excluded")
+        if (
+            trades["material_aggregated_actions_per_day"] or 0
+        ) > config["maximum_material_actions_per_day"]:
+            warnings.append("sampled activity conflicts with the low-frequency preference")
+        if (closed["single_event_abs_pnl_fraction"] or 0) > 0.25:
+            warnings.append("sampled closed PnL is concentrated above twenty-five percent")
+        review.append(
+            {
+                **candidate,
+                "profile": profile,
+                "recent_trade_audit": trades,
+                "closed_position_audit": closed,
+                "review_warnings": warnings,
+                "source_errors": evidence.get("errors", {}),
+                "candidate_status": "manual_identity_strategy_independence_review",
+                "expert_status": "not_approved",
+            }
+        )
+    return {
+        "generated_at": observed_at.isoformat(),
+        "configuration_version": config["version"],
+        "mode": "peer_discovery",
+        "paper_only": True,
+        "status": "complete" if not reference_errors and not market_errors else "partial",
+        "reference_wallets": peer_config["reference_wallets"],
+        "lookback_days": peer_config["lookback_days"],
+        "consensus_window_hours": peer_config["consensus_window_hours"],
+        "minimum_shared_target_markets": peer_config[
+            "minimum_shared_target_markets"
+        ],
+        "seed_target_market_count": len(raw["market_sources"]),
+        "reference_material_action_count": raw["reference_material_action_count"],
+        "mechanical_peer_count": len(candidates),
+        "review_candidate_count": len(review),
+        "review_candidates": review,
+        "source_completeness": {
+            "reference_errors": reference_errors,
+            "market_errors": market_errors,
+            "reference_samples_at_limit": reference_limit_hits,
+            "market_samples_at_limit": market_limit_hits,
+        },
+        "eligibility": {
+            "price_filter": "none; observed prices are recorded but never gate admission",
+            "time_to_resolution_filter": "none; time to resolution is not an admission gate",
+            "materiality": f"estimated net directional notional must reach ${config['minimum_material_notional_usd']:g}; this is not a price threshold",
+            "same_market": "exact conditionId only",
+            "same_direction": "binary outcome-index exposure after 30-minute netting",
+        },
+        "team": {
+            "required_independent_experts": peer_config["required_independent_experts"],
+            "team_ready": False,
+            "status": "manual review required; wallet count is not expert independence",
+        },
+        "tracking": {
+            "status": "not_started",
+            "reason": "A reviewable independent cohort must be frozen before prospective tracking.",
+        },
+        "limitations": [
+            "Current-data discovery is in-sample candidate generation and cannot establish alpha.",
+            "A market sample at the public API limit is visibly truncated; presence is evidence, absence is not.",
+            "A sell may close an old position rather than express a new thesis; later tracking must reconstruct net position changes.",
+            "Similar names, timing or wallets do not prove common ownership, and different names do not prove independence.",
+            "No signal, paper position, order, credential, M2/M3 integration or M4 evidence clock is created.",
+        ],
+    }
+
+
+def write_peer_artifacts(raw, report, observed_at):
+    stamp = observed_at.strftime("%Y%m%dT%H%M%S%fZ")
+    raw_path = RUNTIME / f"peer-sources-{stamp}.json.gz"
+    report_path = RUNTIME / f"peer-discovery-{stamp}.json"
+    m1.atomic_json(raw_path, raw, compress=True)
+    report = {
+        **report,
+        "raw_evidence_content_sha256": content_hash(raw),
+        "raw_evidence_file_sha256": file_hash(raw_path),
+        "raw_evidence_path": str(raw_path),
+    }
+    m1.atomic_json(report_path, report)
+    m1.atomic_json(LATEST_PEER_REPORT_PATH, report)
+    return report_path, raw_path, report
+
+
+def run_peer_discovery(config=None):
+    config = validate_config(config or load_config())
+    observed_at = utc_now()
+    start, reference_sources, reference_actions, market_sources = fetch_peer_sources(
+        config, observed_at
+    )
+    market_rows = [
+        row for source in market_sources.values() for row in (source.get("trades") or [])
+    ]
+    market_actions = directional_actions(
+        market_rows, config, start_timestamp=start, target_only=True
+    )
+    candidates = match_peer_actions(reference_actions, market_actions, config)
+    review_wallets = [
+        candidate["wallet"]
+        for candidate in candidates[
+            : config["peer_discovery"]["maximum_candidates_to_review"]
+        ]
+    ]
+    candidate_evidence = fetch_all_candidate_evidence(
+        [{"wallet": wallet} for wallet in review_wallets], config, observed_at
+    )
+    raw = {
+        "observed_at": observed_at.isoformat(),
+        "configuration": config,
+        "reference_sources": reference_sources,
+        "reference_material_action_count": len(reference_actions),
+        "market_sources": market_sources,
+        "candidate_evidence": candidate_evidence,
+    }
+    report = build_peer_report(raw, candidates, config, observed_at)
+    report_path, raw_path, report = write_peer_artifacts(raw, report, observed_at)
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "generated_at": report["generated_at"],
+                "seed_target_market_count": report["seed_target_market_count"],
+                "mechanical_peer_count": report["mechanical_peer_count"],
+                "review_candidate_count": report["review_candidate_count"],
+                "team_ready": report["team"]["team_ready"],
+                "report_path": str(report_path),
+                "raw_evidence_path": str(raw_path),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    return 0 if report["status"] == "complete" else 1
 
 
 def run_audit(config=None):
@@ -638,6 +1194,20 @@ def show_status():
     return 0
 
 
+def show_peer_status():
+    if not LATEST_PEER_REPORT_PATH.exists():
+        print(
+            json.dumps(
+                {"status": "not_run", "report_path": str(LATEST_PEER_REPORT_PATH)},
+                indent=2,
+            )
+        )
+        return 1
+    report = json.loads(LATEST_PEER_REPORT_PATH.read_text(encoding="utf-8"))
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0
+
+
 def check():
     config = validate_config(load_config())
     print(
@@ -647,6 +1217,8 @@ def check():
                 "mode": config["mode"],
                 "paper_only": config["paper_only"],
                 "source_hosts": ["data-api.polymarket.com", "gamma-api.polymarket.com"],
+                "peer_price_gate": False,
+                "peer_time_to_resolution_gate": False,
                 "runtime_integration": False,
                 "order_capability": False,
             },
@@ -657,13 +1229,19 @@ def check():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="M4.1-A public expert-wallet candidate audit")
-    parser.add_argument("command", choices=("audit", "status", "check"))
+    parser = argparse.ArgumentParser(description="M4 public expert-wallet research")
+    parser.add_argument(
+        "command", choices=("audit", "status", "peers", "peer-status", "check")
+    )
     command = parser.parse_args().command
     if command == "audit":
         return run_audit()
     if command == "status":
         return show_status()
+    if command == "peers":
+        return run_peer_discovery()
+    if command == "peer-status":
+        return show_peer_status()
     return check()
 
 

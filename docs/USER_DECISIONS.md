@@ -119,6 +119,25 @@ Changing these values now creates a new immutable candidate report and does not 
 
 The user approved a bounded expansion on 2026-08-15: audit up to 50 recurring wallets instead of 30. Every category, period, recurrence, domain, activity, extreme-price, concentration and observation-pool gate from version 1 remains unchanged. This is a discovery-depth change only; it creates a new immutable report, does not reset M1/M2/M3, does not start the prospective M4 clock and cannot promote a wallet to expert status.
 
+## Approved M4.1-B exact-market peer discovery configuration version 3
+
+The user approved exact-market peer discovery on 2026-08-15 and explicitly removed both a minimum probability-price rule and a requirement that markets remain more than 24 hours from resolution. Price and time to resolution may be recorded for later analysis but cannot admit or reject a peer.
+
+| Control you can edit | Approved default | Effect of changing it |
+|---|---:|---|
+| Reference wallets | Betwick | Changes the information neighborhood being explored; a new reference can produce a different candidate graph |
+| Historical discovery window | 90 days | Longer windows add regimes but increase stale-strategy risk |
+| Same-event identity | Exact `conditionId` | This is a safety boundary, not fuzzy title matching |
+| Direction agreement window | 6 hours | Wider windows increase recall and accidental agreement; this is not a holding-period rule |
+| Minimum repeated overlap | 3 distinct target markets | Repeated fills in one market cannot manufacture an expert |
+| Materiality floor | $100 estimated net directional notional after 30-minute netting | Removes dust and offsetting churn only; it is not a minimum share price |
+| Review depth | 20 candidates | Changes manual workload, not expert status |
+| Independent-expert target | 3 | Wallet count alone never proves independence |
+| Price admission rule | None | Prices from 0 through 1 remain eligible and are recorded |
+| Time-to-resolution admission rule | None | Near- and long-dated markets remain eligible |
+
+Configuration v3 is discovery-only. It does not freeze an expert cohort, start prospective tracking, create a signal, connect to M2/M3 or authorize a paper position. Starting that clock requires a named observation panel, an independence review and a separately approved tracking specification.
+
 ## Boundaries that are not preference knobs
 
 - No look-ahead or favorable selection among later books.

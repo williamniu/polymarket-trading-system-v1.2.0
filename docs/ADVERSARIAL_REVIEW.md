@@ -301,7 +301,7 @@ Evidence:
 - all 79 repository tests, including nine focused M4 tests, pass under Homebrew Python 3.11;
 - final audit `2026-08-15T03:33:25.097838Z` completed all nine leaderboard slices with no source error;
 - 106 recurring wallets were discovered, 30 were audited, and only two passed the mechanical screen;
-- raw evidence SHA-256 `a6e7d659e44054844c159736e18708508a96618505418e24e23a836a9a44d08f` re-verified exactly;
+- canonical raw-evidence content SHA-256 `a6e7d659e44054844c159736e18708508a96618505418e24e23a836a9a44d08f` re-verified exactly; configuration v3 later split content and gzip-file hashes into unambiguous fields;
 - the two candidate wallets are `betwick` (`0xc851cd9bee7d262afd78674f861f9f576a12cd2a`) and `0x06b2934b382d4429d50d7239ee375a76167f9f35`;
 - an earlier diagnostic report admitted four candidates; adversarial review found a substring classifier defect, foreign-politics leakage, a scanner-like candidate and contract-level concentration. Correcting those defects reduced the final pool to two without deleting the diagnostic evidence.
 
@@ -324,7 +324,7 @@ Evidence:
 
 - all nine leaderboard slices completed; 108 recurring wallets were found and the top 50 were audited;
 - the observation screen still returned only `betwick` (`0xc851cd9bee7d262afd78674f861f9f576a12cd2a`) and `0x06b2934b382d4429d50d7239ee375a76167f9f35`;
-- report time is `2026-08-15T21:14:51.522367Z`; the raw evidence hash `ab6076e37f0a0ad9b7e67627261201522356a7752034cda8969e9f78ce1a6af8` re-verified exactly;
+- report time is `2026-08-15T21:14:51.522367Z`; canonical raw-evidence content hash `ab6076e37f0a0ad9b7e67627261201522356a7752034cda8969e9f78ce1a6af8` re-verified exactly;
 - their recent samples contain 16 and 22 distinct condition IDs respectively, with zero shared condition IDs.
 - public identity references used for the manual review are Betwick's [Polymarket profile](https://polymarket.com/profile/0xc851cd9bee7d262afd78674f861f9f576a12cd2a), linked [X profile](https://x.com/Betwick1) and [Polymarket-published interview](https://news.polymarket.com/p/tilted-how-betwick-lost-70-of-his); the anonymous wallet exposed no comparable public identity.
 
@@ -341,3 +341,37 @@ Residual gates:
 - the copied action must reconstruct net position change, not treat every buy or sell fill as a fresh directional thesis;
 - latency, observable price, capacity, correlated-event exposure and an executable benchmark must be frozen before prospective collection;
 - no signal, paper position, M4 clock or runtime integration is authorized.
+
+## M4.1-B exact-market peer discovery
+
+Date: 2026-08-15
+
+Decision: **PASS for offline candidate discovery; FAIL for expert-team formation.** Configuration v3 expands discovery sideways from Betwick's exact target markets. It does not convert wallet correlation into expertise, independence or alpha.
+
+Verified attacks and controls:
+
+- matching requires exact `conditionId`, binary direction agreement and at least three distinct markets; repeated fills in one market do not count as three experts or three events;
+- 30-minute netting reconstructs one action from fragmented fills; the $100 floor applies to estimated net directional notional, so high gross turnover with near-zero net exposure cannot fake a view;
+- there is no minimum probability price and no time-to-resolution admission rule;
+- signed timing distinguishes leaders from followers; a review warning fires when at least 80% of three or more matches occur after the reference and within one minute;
+- public API limit hits and source errors are explicit; a capped sample supports observed presence but never an absence claim;
+- every peer remains `not_approved`, `team_ready` remains false, and tracking remains `not_started`;
+- compressed evidence now exposes separate canonical-content and gzip-file SHA-256 values, removing the earlier ambiguous hash label.
+
+Evidence:
+
+- report `2026-08-15T22:43:34.485267Z` completed with no source error;
+- Betwick produced 166 material target actions across 31 exact seed markets; 65 mechanical peers were found and 20 were enriched for review;
+- 23 of 31 market responses reached the configured 10,000-row cap;
+- gzip file SHA-256 `3895b0e13fa6aacc6d56bf1eae981463a25c126e4eac38ccd70d38d340bfadf1` and canonical content SHA-256 `0896cbbe106e529cc8443c8aa443b033c42ed86f12dd17bb21f019b2b7b12509` both re-verified;
+- Kekkone matched ten actions across six markets, with zero sub-minute matches and both leading and lagging observations; this is compatible with independence but does not prove it;
+- PhilIvey9 matched 15 actions across seven markets, all after Betwick and all within one minute, with a 22-second median lag. It is a useful follower control and must not count as an independent expert.
+
+Residual gates:
+
+- identity evidence is pseudonymous and beneficial-owner independence remains unknown;
+- current-data discovery is in-sample and cannot establish forward profitability;
+- sampled `SELL` actions may be exits rather than fresh opposing theses until positions are reconstructed prospectively;
+- Kekkone's recent trades and closed positions are capped; Betwick's known drawdown and strategy drift remain relevant;
+- a named observation panel, collection cadence, position reconstruction, delayed executable quote, benchmark and falsification rule must be approved before prospective tracking begins;
+- no signal, order, paper position, credential, M2/M3 integration or real-capital path exists.
