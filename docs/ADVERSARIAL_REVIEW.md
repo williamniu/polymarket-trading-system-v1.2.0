@@ -273,3 +273,43 @@ Residual gates:
 
 - Segment 3 must independently reach 168 hours, 600 aggregate intents, at least 250 per venue and zero reconciliation errors.
 - Probe PnL remains execution-friction evidence, not predictive alpha.
+
+## M4.1-A expert-wallet candidate audit review
+
+Date: 2026-08-14
+
+Decision: **PASS for an offline public-data candidate-audit tool only.** It does not establish an expert cohort, alpha, a consensus signal, M4 promotion, runtime integration or trading authorization.
+
+Verified attacks:
+
+- all nine Politics/Economics/Finance by Week/Month/All leaderboard slices must succeed before an observation pool can be emitted;
+- wallets are deduplicated and ranked first by recurrence and breadth, not aggregate overlapping-period PnL;
+- missing trades or closed positions fail a candidate closed, while a missing profile weakens identity evidence visibly;
+- 30-minute aggregation prevents fragmented fills from becoming repeated expert actions;
+- the aggregation uses a true rolling window per market, outcome and side, so fills around a clock boundary remain one action;
+- sports, esports, weather, culture, mentions and crypto-price titles are excluded before target-domain matching;
+- token-boundary matching prevents `nfl` inside `inflation` from creating false sports classifications;
+- generic foreign-election titles no longer qualify merely because they contain `election`;
+- a maximum of ten sampled material actions per day enforces the approved low-frequency preference;
+- extreme-price, target-domain, excluded-domain and sample-size checks are explicit and user-editable;
+- closed-position concentration is aggregated by event slug, so splitting one view across related contracts cannot fake diversification;
+- incomplete leaderboard snapshots emit no pool, and every passing row is labeled candidate-only rather than expert;
+- source and report evidence are separate, the compressed source is SHA-256 sealed, and the tool never opens SQLite or exposes order/credential capability.
+
+Evidence:
+
+- all 79 repository tests, including nine focused M4 tests, pass under Homebrew Python 3.11;
+- final audit `2026-08-15T03:33:25.097838Z` completed all nine leaderboard slices with no source error;
+- 106 recurring wallets were discovered, 30 were audited, and only two passed the mechanical screen;
+- raw evidence SHA-256 `a6e7d659e44054844c159736e18708508a96618505418e24e23a836a9a44d08f` re-verified exactly;
+- the two candidate wallets are `betwick` (`0xc851cd9bee7d262afd78674f861f9f576a12cd2a`) and `0x06b2934b382d4429d50d7239ee375a76167f9f35`;
+- an earlier diagnostic report admitted four candidates; adversarial review found a substring classifier defect, foreign-politics leakage, a scanner-like candidate and contract-level concentration. Correcting those defects reduced the final pool to two without deleting the diagnostic evidence.
+
+Residual gates:
+
+- two candidates cannot satisfy a three-independent-expert rule, so no consensus signal may be generated;
+- both require manual identity, strategy and wallet-independence review; one lacks a public X identity;
+- recent trade and closed-position samples are capped and visibly truncated for some candidates;
+- editable title keywords are a conservative screen, not authoritative market taxonomy;
+- no delay replay, exact event mapping, Kalshi/Polymarket US executable-price comparison, prospective cohort freeze or paper shadow exists;
+- current leaderboard selection cannot be used to claim historical out-of-sample performance.

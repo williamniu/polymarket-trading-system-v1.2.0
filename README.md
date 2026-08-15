@@ -4,11 +4,12 @@ A paper-only research system designed to become more reliable through measured f
 
 ## Current stage
 
-- **M1 venue validation is still collecting evidence through M2.** No venue has passed the 168-hour/600-sample gate.
-- **M2 paper infrastructure is deployed.** Its evidence clock started at `2026-08-01T17:14:33Z`; the first two launchd-managed cycles passed, but the separate 168-hour/600-cycle promotion gate remains locked.
+- **M1 venue validation has met its mechanical time/sample gate.** Kalshi passes the configured quality screen; Polymarket US still fails the top-quote-notional gate. Formal review and legal/account eligibility remain separate.
+- **M2 paper infrastructure is deployed and mechanically promotion-eligible.** It remains active while formal review is pending.
 - M2 uses one SQLite source of truth, heartbeats, health checks, alerts, backups, evidence migration, and a $5,000 simulated account baseline.
 - **M3.7 paper shadow execution is connected to the existing M2 service.** Each scheduled cycle runs one-contract public-data probes for both venues, resolves open positions through exact public market endpoints, seals official settlements, and keeps promotion evidence in immutable segments.
-- M3 probe PnL is execution-friction evidence, not a strategy or profitability claim. M4 remains locked.
+- **M4.1-A offline candidate auditing is implemented.** It reads public Polymarket wallet data, writes ignored versioned research evidence, and has produced two candidates for manual review. It has no runtime, signal, position or order integration.
+- M3 probe PnL is execution-friction evidence, and M4 candidates are leads rather than experts. Neither is a profitability claim.
 - There is no credential loading, signing, order submission, deposit, withdrawal, or live-trading code.
 - Market making, latency arbitrage, and maker-rebate capture are prohibited as primary alpha sources.
 
@@ -20,7 +21,7 @@ The deterministic runtime collects evidence and enforces hard rules. An LLM may 
 
 ```bash
 /opt/homebrew/bin/python3.11 -m unittest discover -s tests -v
-/opt/homebrew/bin/python3.11 -m py_compile m1.py m2.py m3.py tests/test_*.py
+/opt/homebrew/bin/python3.11 -m py_compile m1.py m2.py m3.py m4.py tests/test_*.py
 ```
 
 ## M1 read-only commands
@@ -59,3 +60,13 @@ See `docs/MENTAL_MODEL.md` for the project knowledge graph and the distinction b
 ```
 
 The safe operational stop is `runtime_probe.enabled` in `config/m3.json`. `m3-new-segment` is an approval-gated maintenance command that requires this switch to be disabled and archives the prior counters without rewriting its rows. M3 configuration v3 runs both venues per 15-minute M2 cycle and requires at least 250 valid intents per venue as part of the unchanged 168-hour/600-intent gate. See `docs/USER_DECISIONS.md` for the complete user-editable control surface.
+
+## M4.1-A read-only commands
+
+```bash
+/opt/homebrew/bin/python3.11 m4.py check
+/opt/homebrew/bin/python3.11 m4.py audit
+/opt/homebrew/bin/python3.11 m4.py status
+```
+
+`audit` reads only official public leaderboard, trade, closed-position and profile endpoints. It writes raw compressed evidence and a human-readable report under ignored `runtime/m2/research/m4/`; it never opens the operational SQLite database. `status` displays the latest report. A passing screen means only “candidate for manual observation,” never “expert” or “alpha.”

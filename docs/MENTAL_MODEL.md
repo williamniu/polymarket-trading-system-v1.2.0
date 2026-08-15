@@ -32,18 +32,20 @@ flowchart TD
 | Layer | Claim | State | What would disprove it |
 |---|---|---|---|
 | M0 | The system cannot silently escape paper mode or relax approved risk | Established in code and tests | A bypass, mutable limit, credential path, or live endpoint |
-| M1 | At least one legal venue has sufficiently reliable, structured, executable public data | Collecting evidence | Insufficient uptime, samples, rules, quotes, depth, or account eligibility |
-| M2 | One Mac can preserve state and detect failure continuously | Deployed paper-only; scheduled evidence is accruing, while the seven-day runtime gate remains locked | Duplicate writer, stale heartbeat, corrupt state, unrecoverable restart, missed schedule |
-| M3 | Paper fills and position lifecycles resemble possible real outcomes | M3.7 attempts one independent paper probe per venue inside the existing M2 writer; segment 3 collects promotion evidence | Midpoint fills, optimistic queue, stranded positions, guessed settlements, ignored fees/latency/depth, or one venue hiding another |
-| M4 | A signal has incremental predictive value after costs | Not established | Look-ahead, selection bias, regime dependence, or negative out-of-sample value |
+| M1 | At least one legal venue has sufficiently reliable, structured, executable public data | Mechanical gate met; Kalshi passes the configured quality screen, while formal review and legal/account eligibility remain | Insufficient rules, quotes, depth, availability, or legal/account eligibility |
+| M2 | One Mac can preserve state and detect failure continuously | Deployed paper-only and mechanically eligible; formal promotion review remains | Duplicate writer, stale heartbeat, corrupt state, unrecoverable restart, missed schedule |
+| M3 | Paper fills and position lifecycles resemble possible real outcomes | M3.7 is mechanically eligible with zero reconciliation errors; formal promotion review remains | Midpoint fills, optimistic queue, stranded positions, guessed settlements, ignored fees/latency/depth, or one venue hiding another |
+| M4 | A signal has incremental predictive value after costs | M4.1-A candidate audit exists; two wallets await manual review, but no expert cohort or signal exists | Look-ahead, selection bias, linked wallets, delay decay, regime dependence, or negative out-of-sample value |
 | M5-M6 | The system can improve without grading or rewriting its own safety test | Not built | Self-promotion, test weakening, leakage, or failed rollback |
 | M7 | Small live capital can be operated legally and safely | Locked | Any missing prior gate or missing fresh approval |
 
 The correct current statement is: **we have improved the quality of future learning, not proved profitability.**
 
+At `2026-08-15T03:33:25Z`, the first strict M4.1-A audit sealed all nine Politics/Economics/Finance leaderboard slices and public evidence for 30 recurring wallets. Only `betwick` and wallet `0x06b2934b382d4429d50d7239ee375a76167f9f35` passed the mechanical screen. They remain candidate observations: the first still has truncated closed-position evidence, the second lacks a public X identity, and neither has passed independence, delay, prospective or executable-price tests. Because the pool has fewer than three qualified candidates, the user's three-independent-expert hypothesis cannot emit a signal.
+
 M3 segment 1 proved that execution evidence could be recorded, but its broad-market lookup stranded a finalized Kalshi position. Its 46 valid intents and 30 failures are retained as diagnostic history and excluded from promotion. Segment 2 starts after the approved M3.6 repair; all 168-hour/600-intent gates remain locked.
 
-M3 now runs that counterfactual on public point-orderbook evidence. It automatically creates the smallest execution probe, but it still does not contain a predictive signal: buy/close probe PnL measures spread, latency, depth and fee friction only. The separate M3 clock cannot promote before 168 hours, 600 recorded intents and zero reconciliation errors.
+M3 now runs that counterfactual on public point-orderbook evidence. It automatically creates the smallest execution probe, but it still does not contain a predictive signal: buy/close probe PnL measures spread, latency, depth and fee friction only. Its mechanical time, sample and reconciliation gates have been met; formal adversarial promotion review remains required.
 
 The post-M3.6 snapshot at `2026-08-02T22:44:12Z` is: M1 has 193 venue samples over 48.43 hours; M2 has 118 eligible runtime cycles over 29.48 hours; active M3 segment 2 has two valid intents, zero failed probes and zero reconciliation errors over 0.26 hours. Two natural LaunchAgent cycles recovered the two stale lifecycles, all 14 new evidence seals re-verified, SQLite integrity was `ok`, and M4 remained locked. These are reliability and execution-correctness facts, not a return claim.
 

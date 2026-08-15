@@ -92,6 +92,29 @@ The user approved higher M3 paper-intent density on 2026-08-04. M3 remains an ex
 
 Segment 2 is immutable diagnostic history. Configuration v3 starts segment 3 after the Polymarket binary-outcome ordering repair. The repair accepts exactly one Yes and one No in either order; it does not weaken product, market, event or theme identity checks.
 
+## Approved M4.1-A candidate-audit configuration version 1
+
+The user approved the expert-wallet candidate-audit plan on 2026-08-14. This stage is public-data research only: it does not freeze an expert cohort, create a consensus signal, connect to M2/M3, or create a paper position.
+
+| Control you can edit | Approved default | Effect of changing it |
+|---|---:|---|
+| Source categories | Politics, Economics, Finance | Changing the universe changes who can enter the candidate pool |
+| Leaderboard periods | Week, Month, All | Fewer periods weaken persistence evidence; more current-only emphasis raises winner selection bias |
+| Minimum appearances | 2 of 9 snapshots | Higher is more persistent but may exclude specialists |
+| Candidates audited / observation cap | 30 / 15 | Higher costs more public requests; the cap never forces weak wallets into the pool |
+| Recent trade window / limit | 30 days / 500 trades | Longer or deeper samples reduce recency but reveal more regime and domain drift |
+| Recent closed-position limit | 50 | The public endpoint cap makes all reported PnL metrics explicitly sample-limited |
+| Fill aggregation window | 30 minutes | Prevents fragmented fills from becoming repeated actions |
+| Material action floor | Greater of $100 and the wallet's sampled median aggregated action | A higher floor rejects noise but may miss small specialist wallets |
+| Maximum material actions per day | 10 | Enforces the low-frequency preference; higher values admit scanner-like behavior |
+| Target-domain minimum | 50% of recent trade notional and 50% of sampled closed positions | Higher means purer US politics/economics/finance/macro exposure |
+| Excluded-domain maximum | 10% for recent trade notional and sampled closed positions | Sports, esports, weather, culture, mentions and crypto-price markets remain out of scope |
+| Extreme-price maximum | 50% of sampled trades at or below 0.10 or at or above 0.90 | Lower values more aggressively reject near-resolution strategies |
+| Single-event absolute PnL maximum | 25% of sampled absolute event PnL | Aggregates multiple contracts by event so contract splitting cannot fake diversification |
+| Observation-pool admission | Every mechanical check must pass | Passing still requires manual identity and independence review |
+
+Changing these values now creates a new immutable candidate report and does not reset M1, M2 or M3. Once a cohort is manually approved and the prospective M4 clock starts, any universe, classification or threshold change requires a new M4 configuration version and restarts only that M4 evidence clock. Historical reports and raw evidence remain unchanged.
+
 ## Boundaries that are not preference knobs
 
 - No look-ahead or favorable selection among later books.
@@ -100,3 +123,4 @@ Segment 2 is immutable diagnostic history. Configuration v3 starts segment 3 aft
 - No missing fee, latency, partial-fill or settlement accounting.
 - No strategy or LLM changing its own risk or promotion test.
 - No credential, live endpoint or active-service change without its separate approval.
+- No candidate wallet may label itself an expert, satisfy the three-independent-expert rule, or authorize a trade without separate approved M4 stages.

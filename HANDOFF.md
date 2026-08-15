@@ -1,6 +1,6 @@
 # Polymarket Trading System v1.2.0 — 新对话交接文档
 
-更新时间：2026-08-05（America/New_York）  
+更新时间：2026-08-14（America/New_York）
 适用对象：完全没有聊天上下文、需要继续接管项目的下一位开发者或 Codex 代理。
 
 ## 0. 先读这个：真正的仓库在哪里
@@ -21,9 +21,11 @@ https://github.com/williamniu/polymarket-trading-system-v1.2.0.git
 
 ```text
 branch: main
-HEAD:   45facf77803b8d2e857a93e05cbee108ef87e5ef
+HEAD:   efac3d15e30983eb7bb8c828753479730ebc0c8c
 origin/main: 同一提交
 ```
+
+M4.1-A 的源码和文档变更位于 `agent/m4-wallet-candidate-audit` 功能分支；运行证据位于被 Git 忽略的 `runtime/m2/research/m4/`。发布状态必须用 Git 和 GitHub 重新确认，不能由本交接快照替代。
 
 当前桌面工作区路径：
 
@@ -51,7 +53,7 @@ git rev-parse HEAD
 
 “越用越聪明”不是允许模型自由改代码、改风险线或给自己打分，而是让每一次改进都经过固定测试、样本外验证、shadow deployment、晋级门槛和回滚控制。时间只有在证据链可靠时才产生复利；自动化一个错误的反馈循环，只会让错误复利。
 
-当前阶段只做到 **M3.7 paper execution evidence**。我们已经建立可靠数据、运行基础设施和现实化模拟成交，但还没有建立 M4 的预测信号，因此：
+当前阶段做到 **M3.7 paper execution evidence + M4.1-A offline candidate audit**。我们已经建立可靠数据、运行基础设施、现实化模拟成交和第一版专家钱包候选筛选，但还没有建立 M4 的预测信号，因此：
 
 - 没有证明 alpha；
 - 没有证明稳定盈利；
@@ -86,7 +88,8 @@ M0–M3 目前主要是在可靠地测量等号右侧的成本和错误，不是
 5. `docs/MENTAL_MODEL.md`：M0–M7 心智模型和三套证据时钟。
 6. `docs/ADVERSARIAL_REVIEW.md`：已经攻击过什么、修过什么、还有哪些门槛。
 7. `config/risk-policy.json`、`config/m1.json`、`config/m2.json`、`config/m3.json`。
-8. 修改代码前再完整阅读相关的 `m1.py`、`m2.py`、`m3.py` 和测试。
+8. `config/m4.json`：用户批准的候选钱包审计筛选面。
+9. 修改代码前再完整阅读相关的 `m1.py`、`m2.py`、`m3.py`、`m4.py` 和测试。
 
 不要仅凭本交接文档修改资金、风险或运行逻辑；动态状态必须重新查询，代码事实以仓库为准。
 
@@ -155,7 +158,7 @@ flowchart TD
 - 不把 market making 当成 alpha；
 - M1 继续由 M2 的自然周期累计证据。
 
-尚未晋级：必须同时达到 168 小时和 600 个样本，并满足平台质量门槛。法律和账户资格是另一个独立门槛，不能被 API 可用性替代。
+机械时间和样本门槛已经达到；Kalshi 通过配置的质量筛选，Polymarket US 仍未通过顶部名义金额门槛。正式晋级审查以及法律和账户资格仍是独立门槛，不能被 API 可用性替代。
 
 ### M2：24/7 运行、记忆和健康
 
@@ -221,48 +224,49 @@ flowchart TD
 
 自然周期 460 首次在同一周期记录两平台订单并精确对账。自然周期 464 中 Kalshi 的非双边盘口被拒绝，而 Polymarket US 仍正常记录，证明失败隔离真实有效。
 
+### M4.1-A：专家钱包候选审计
+
+已完成离线、只读、无凭证的候选审计器：
+
+- 读取 Polymarket 公开 Politics、Economics、Finance 的 Week、Month、All 九个排行榜切片；
+- 对复现候选读取公开成交、最近平仓和公开资料；
+- 聚合拆单并审查领域纯度、体育等排除项、极端价格、低频偏好和按事件归并后的盈亏集中度；
+- 原始压缩证据与人类可读报告分别保存到忽略目录 `runtime/m2/research/m4/` 并用 SHA-256 关联；
+- 不打开 SQLite、不接入 LaunchAgent、不生成 signal、position 或 order。
+
+最终严格审计从 106 个复现钱包中审计 30 个，只留下 `betwick` 和 `0x06b2934b382d4429d50d7239ee375a76167f9f35` 两个待人工复核候选。二者不是专家，也不足以满足三位独立专家的共识条件。
+
 ## 5. 交接时的动态快照
 
-以下快照来自 `2026-08-05T20:59:08Z` 左右。系统仍在运行，数字会继续变化；新对话必须用命令刷新，不要把本表当成当前真相。
+以下快照来自 `2026-08-15T03:17:59Z` 左右。系统仍在运行，数字会继续变化；新对话必须用命令刷新，不要把本表当成当前真相。
 
 | 层 | 当前值 | 晋级门槛/状态 |
 |---|---:|---|
-| M1 venue evidence | 471 样本，118.499 小时 | 需 600 样本和 168 小时；未晋级 |
-| M2 runtime evidence | 396 合格周期，99.552 小时 | 需 600 周期和 168 小时；未晋级 |
-| M2 total cycles | 471 | 最近周期 471，耗时 6.835 秒，正常 |
-| LaunchAgent | 396 次启动 | last exit code 0，900 秒间隔 |
-| M3 active segment | segment 3 / config v3 | collecting，未晋级 |
-| M3 segment 3 | 20 有效 intent，3 失败，2.967 小时 | 需 600 intent、168 小时、每平台至少 250 |
-| Polymarket US | 12 intent，0 失败 | 最新 probe recorded |
-| Kalshi | 8 intent，3 失败 | 3 次均为非双边 point book，属于安全拒绝 |
+| M1 venue evidence | 1,352 样本，340.891 小时 | 机械门槛完成；Kalshi 质量合格，Polymarket US 顶部名义金额不合格 |
+| M2 runtime evidence | 1,277 合格周期，321.944 小时 | 机械晋级条件满足；待正式审查 |
+| M2 total cycles | 1,352 | 最近周期 1,352，状态正常 |
+| M3 active segment | segment 3 / config v3 | 机械晋级条件满足；仍为 collecting，待正式审查 |
+| M3 segment 3 | 1,746 有效 intent，37 失败，225.281 小时 | 每个平台均超过 250，零 reconciliation error |
+| Polymarket US | 874 intent，19 失败 | 最新 probe recorded |
+| Kalshi | 872 intent，18 失败 | 最新 probe recorded |
 | M3 reconciliation errors | 0 | 必须始终为 0 |
 | M3 pending probes | 0 | 正常 |
 | paper account frozen | false | 正常 |
 | SQLite integrity | ok | 正常 |
+| M4.1-A | 30 钱包完成机械审计，2 个待人工复核候选 | 无专家 cohort、无 signal、无 position |
 
-交接时 paper 账户快照：
+paper 账户的现金、可执行权益和持仓会随自然周期变化，不在交接文档复制陈旧数值；用 `m2.py status` 和权威 SQLite 重新查询。probe 持仓不是策略仓位或 alpha 证明。
 
-```text
-starting capital: $5,000.00
-cash:             $4,994.82
-executable equity:$4,995.33
-high watermark:   $5,000.00
-frozen:           false
-nonzero positions:1
-```
-
-唯一非零持仓是 Polymarket US 的一份 YES paper probe；这不是策略持仓或 alpha 证明。账户金额会随下一自然周期改变。
-
-M1 还暴露出一个值得观察而不是立即“优化掉”的事实：Polymarket US 的 median top-quote notional 约为 USD 7.849，当前仍未满足选场流动性门槛。不要为了让 gate 变绿就降低标准。
+M1 还暴露出一个值得观察而不是立即“优化掉”的事实：Polymarket US 的 median top-quote notional 约为 USD 8.0，当前仍未满足选场流动性门槛。不要为了让 gate 变绿就降低标准。
 
 ## 6. 当前到底卡在哪里
 
 目前没有已知代码部署 blocker。系统正在正确地被以下证据门槛锁住：
 
-1. M1 尚未达到 168 小时/600 样本，Polymarket US 顶部可执行名义金额也偏低。
-2. M2 尚未达到 168 小时/600 个正式运行周期。
-3. M3 segment 3 刚开始，尚未达到 168 小时/600 intent/每平台 250/零对账错误。
-4. M4 尚未建立任何经过时间对齐、成本调整和样本外验证的预测 alpha。
+1. M1、M2、M3 的机械时间和样本门槛已经满足，但正式晋级审查尚未完成；Polymarket US 顶部可执行名义金额仍不合格。
+2. M4.1-A 只有两个待人工复核候选，无法满足三个独立专家的共识条件。
+3. 候选人的身份、钱包独立性、延迟可复制性和前瞻表现都未验证。
+4. M4 尚未建立任何经过时间对齐、成本调整和样本外验证的预测 alpha，也未产生交易信号。
 5. 美国地区、未来新加坡等司法辖区、Polymarket US/Kalshi/国际平台的实际账户和合法使用资格仍必须在接近实盘时重新核实。
 6. 远程 alert、实时 Bloomberg 式 dashboard 和随时随地查看界面尚未实现；目前以 CLI、SQLite 和日志为权威。
 7. M5 champion/challenger、M6 受控系统进化、M7 小资金实盘均未实现或未解锁。
@@ -308,12 +312,13 @@ tail -n 50 runtime/m2/collector-error.log
 
 ```bash
 /opt/homebrew/bin/python3.11 -m unittest discover -s tests -v
-/opt/homebrew/bin/python3.11 -m py_compile m1.py m2.py m3.py tests/test_*.py
+/opt/homebrew/bin/python3.11 -m py_compile m1.py m2.py m3.py m4.py tests/test_*.py
 /opt/homebrew/bin/python3.11 m3.py check
+/opt/homebrew/bin/python3.11 m4.py check
 git diff --check
 ```
 
-已知基线是 70 项测试通过。
+当前完整基线是 79 项测试通过，其中 M4.1-A 有 9 项聚焦测试。
 
 ### 第四步：根据证据决定“保持不动”还是提案
 
@@ -323,16 +328,16 @@ git diff --check
 
 ## 8. 推荐的后续路线
 
-### 近期：让 M1/M2/M3 门槛自然完成
+### 近期：正式审查 M1/M2/M3，并保护自然运行证据
 
 1. 持续观察自然 LaunchAgent 周期，不用手动 `service-cycle` 冒充调度证据。
 2. 定期记录每个平台 intent、失败原因、持仓生命周期、结算和 reconciliation。
-3. 达到各门槛时做一次冻结快照和对抗式晋级审查，而不是自动宣布通过。
+3. 机械门槛已达到；下一步做冻结快照和对抗式晋级审查，而不是自动宣布通过。
 4. 任何 evidence-changing 修复都必须：暂停 M3 probe、在线备份、保留并归档旧 segment、修改并测试、新建 segment、重新启用、观察自然周期。
 
-### 并行规划 M4，但实施前先让用户批准方案
+### M4.1-A 已完成；下一步仍需用户批准
 
-M4 才开始回答“凭什么赚钱”。建议先做最小 alpha laboratory，而不是直接接入自动下单：
+M4 才开始回答“凭什么赚钱”。当前只完成候选钱包机械审计。下一步应先人工复核两个候选人的身份、策略类型和独立性，再决定扩大候选池的方法；在至少三个独立候选存在前，不构建共识信号：
 
 1. **专家/钱包行为信号**：研究特定交易者是否在控制存活偏差、入场延迟、仓位重建、可复制价格和费用后仍有增量价值。不能只挑当前排行榜赢家然后回看。
 2. **跨市场相对价值**：比较同一事件在不同合法平台或相关标的中的概率约束，前提是事件定义、结算规则和时间完全对齐。
