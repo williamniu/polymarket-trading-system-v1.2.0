@@ -115,6 +115,10 @@ The user approved the expert-wallet candidate-audit plan on 2026-08-14. This sta
 
 Changing these values now creates a new immutable candidate report and does not reset M1, M2 or M3. Once a cohort is manually approved and the prospective M4 clock starts, any universe, classification or threshold change requires a new M4 configuration version and restarts only that M4 evidence clock. Historical reports and raw evidence remain unchanged.
 
+## Approved M4.1-A2 candidate-audit configuration version 2
+
+The user approved a bounded expansion on 2026-08-15: audit up to 50 recurring wallets instead of 30. Every category, period, recurrence, domain, activity, extreme-price, concentration and observation-pool gate from version 1 remains unchanged. This is a discovery-depth change only; it creates a new immutable report, does not reset M1/M2/M3, does not start the prospective M4 clock and cannot promote a wallet to expert status.
+
 ## Boundaries that are not preference knobs
 
 - No look-ahead or favorable selection among later books.

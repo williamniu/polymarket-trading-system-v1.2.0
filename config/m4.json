@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "mode": "candidate_audit",
   "paper_only": true,
   "source": "polymarket_public_data",
@@ -15,7 +15,7 @@
   ],
   "leaderboard_limit": 50,
   "minimum_leaderboard_appearances": 2,
-  "maximum_candidates_to_audit": 30,
+  "maximum_candidates_to_audit": 50,
   "observation_pool_limit": 15,
   "recent_trade_lookback_days": 30,
   "recent_trade_limit": 500,

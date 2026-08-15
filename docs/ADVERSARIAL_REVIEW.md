@@ -313,3 +313,31 @@ Residual gates:
 - editable title keywords are a conservative screen, not authoritative market taxonomy;
 - no delay replay, exact event mapping, Kalshi/Polymarket US executable-price comparison, prospective cohort freeze or paper shadow exists;
 - current leaderboard selection cannot be used to claim historical out-of-sample performance.
+
+## M4.1-A2 expanded audit and manual candidate review
+
+Date: 2026-08-15
+
+Decision: **PASS for deeper candidate discovery; FAIL for expert-cohort formation.** Configuration v2 changes only the maximum audited recurring wallets from 30 to 50. Every screen gate remains unchanged, and M1/M2/M3 evidence is untouched.
+
+Evidence:
+
+- all nine leaderboard slices completed; 108 recurring wallets were found and the top 50 were audited;
+- the observation screen still returned only `betwick` (`0xc851cd9bee7d262afd78674f861f9f576a12cd2a`) and `0x06b2934b382d4429d50d7239ee375a76167f9f35`;
+- report time is `2026-08-15T21:14:51.522367Z`; the raw evidence hash `ab6076e37f0a0ad9b7e67627261201522356a7752034cda8969e9f78ce1a6af8` re-verified exactly;
+- their recent samples contain 16 and 22 distinct condition IDs respectively, with zero shared condition IDs.
+- public identity references used for the manual review are Betwick's [Polymarket profile](https://polymarket.com/profile/0xc851cd9bee7d262afd78674f861f9f576a12cd2a), linked [X profile](https://x.com/Betwick1) and [Polymarket-published interview](https://news.polymarket.com/p/tilted-how-betwick-lost-70-of-his); the anonymous wallet exposed no comparable public identity.
+
+Manual review:
+
+- **Betwick — conditional observation lead, not approved expert.** The public profile links `@Betwick1`, and a Polymarket-published interview describes repeatable scenario, macro and Fed research. The audit sees 269 trades across 16 markets over 698.7 hours, 45 material actions or 1.55 per day, mostly recent sells/exits, and a truncated 50-position closed sample. The same interview reports a 70% bankroll drawdown, correlated sizing, past tilt and prior mention/movie strategies. Raw wallet direction therefore cannot be copied without position reconstruction and thesis context.
+- **Anonymous index wallet — watchlist only, manually ineligible for the explainable cohort.** It has no public X identity or human-readable profile. All 500 sampled recent trades are buys in daily SPX, DJIA, DAX or FTSE up/down markets; both trade and closed samples are truncated. Its 24.54% single-event absolute-PnL concentration barely clears the 25% gate. This is a short-horizon execution-sensitive pattern, not a documented expert research process.
+- **Independence remains unproved.** Zero shared markets and different strategy families are evidence against simple copying, but public proxy wallets do not prove distinct beneficial owners. More importantly, zero overlap means these two wallets cannot form same-event consensus.
+
+Residual gates:
+
+- at least three explainable wallets that repeatedly overlap in the same target events must be discovered without selecting on later outcomes;
+- beneficial-owner independence needs public identity or on-chain relationship review; unknown is not independent;
+- the copied action must reconstruct net position change, not treat every buy or sell fill as a fresh directional thesis;
+- latency, observable price, capacity, correlated-event exposure and an executable benchmark must be frozen before prospective collection;
+- no signal, paper position, M4 clock or runtime integration is authorized.

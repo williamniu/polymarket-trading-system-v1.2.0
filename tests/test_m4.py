@@ -28,6 +28,8 @@ class M4Test(unittest.TestCase):
 
     def test_configuration_is_public_paper_only_and_excludes_sports(self):
         self.assertEqual(m4.validate_config(self.config), self.config)
+        self.assertEqual(self.config["version"], 2)
+        self.assertEqual(self.config["maximum_candidates_to_audit"], 50)
         self.assertTrue(self.config["paper_only"])
         self.assertEqual(
             set(self.config["categories"]), {"POLITICS", "ECONOMICS", "FINANCE"}

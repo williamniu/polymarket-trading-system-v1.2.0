@@ -8,7 +8,7 @@ A paper-only research system designed to become more reliable through measured f
 - **M2 paper infrastructure is deployed and mechanically promotion-eligible.** It remains active while formal review is pending.
 - M2 uses one SQLite source of truth, heartbeats, health checks, alerts, backups, evidence migration, and a $5,000 simulated account baseline.
 - **M3.7 paper shadow execution is connected to the existing M2 service.** Each scheduled cycle runs one-contract public-data probes for both venues, resolves open positions through exact public market endpoints, seals official settlements, and keeps promotion evidence in immutable segments.
-- **M4.1-A offline candidate auditing is implemented.** It reads public Polymarket wallet data, writes ignored versioned research evidence, and has produced two candidates for manual review. It has no runtime, signal, position or order integration.
+- **M4.1-A2 offline candidate auditing is implemented.** A version-2 audit examined 50 recurring wallets and again produced two mechanical candidates. Manual review retains Betwick only as a conditional observation lead; the anonymous index wallet is not eligible for an explainable expert cohort. There is still no cohort or signal integration.
 - M3 probe PnL is execution-friction evidence, and M4 candidates are leads rather than experts. Neither is a profitability claim.
 - There is no credential loading, signing, order submission, deposit, withdrawal, or live-trading code.
 - Market making, latency arbitrage, and maker-rebate capture are prohibited as primary alpha sources.
@@ -61,7 +61,7 @@ See `docs/MENTAL_MODEL.md` for the project knowledge graph and the distinction b
 
 The safe operational stop is `runtime_probe.enabled` in `config/m3.json`. `m3-new-segment` is an approval-gated maintenance command that requires this switch to be disabled and archives the prior counters without rewriting its rows. M3 configuration v3 runs both venues per 15-minute M2 cycle and requires at least 250 valid intents per venue as part of the unchanged 168-hour/600-intent gate. See `docs/USER_DECISIONS.md` for the complete user-editable control surface.
 
-## M4.1-A read-only commands
+## M4.1-A2 read-only commands
 
 ```bash
 /opt/homebrew/bin/python3.11 m4.py check

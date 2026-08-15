@@ -1,6 +1,6 @@
 # Polymarket Trading System v1.2.0 — 新对话交接文档
 
-更新时间：2026-08-14（America/New_York）
+更新时间：2026-08-15（America/New_York）
 适用对象：完全没有聊天上下文、需要继续接管项目的下一位开发者或 Codex 代理。
 
 ## 0. 先读这个：真正的仓库在哪里
@@ -20,12 +20,12 @@ https://github.com/williamniu/polymarket-trading-system-v1.2.0.git
 当前分支和最后核实的提交：
 
 ```text
-branch: main
-HEAD:   efac3d15e30983eb7bb8c828753479730ebc0c8c
-origin/main: 同一提交
+base branch: main
+origin/main: efac3d15e30983eb7bb8c828753479730ebc0c8c
+working branch: agent/m4-wallet-candidate-audit
 ```
 
-M4.1-A 的源码和文档变更位于 `agent/m4-wallet-candidate-audit` 功能分支；运行证据位于被 Git 忽略的 `runtime/m2/research/m4/`。发布状态必须用 Git 和 GitHub 重新确认，不能由本交接快照替代。
+M4.1-A/A2 的源码和文档变更位于 `agent/m4-wallet-candidate-audit` 功能分支和 draft PR #1；运行证据位于被 Git 忽略的 `runtime/m2/research/m4/`。发布状态必须用 Git 和 GitHub 重新确认，不能由本交接快照替代。
 
 当前桌面工作区路径：
 
@@ -224,7 +224,7 @@ flowchart TD
 
 自然周期 460 首次在同一周期记录两平台订单并精确对账。自然周期 464 中 Kalshi 的非双边盘口被拒绝，而 Polymarket US 仍正常记录，证明失败隔离真实有效。
 
-### M4.1-A：专家钱包候选审计
+### M4.1-A2：专家钱包候选审计
 
 已完成离线、只读、无凭证的候选审计器：
 
@@ -234,38 +234,38 @@ flowchart TD
 - 原始压缩证据与人类可读报告分别保存到忽略目录 `runtime/m2/research/m4/` 并用 SHA-256 关联；
 - 不打开 SQLite、不接入 LaunchAgent、不生成 signal、position 或 order。
 
-最终严格审计从 106 个复现钱包中审计 30 个，只留下 `betwick` 和 `0x06b2934b382d4429d50d7239ee375a76167f9f35` 两个待人工复核候选。二者不是专家，也不足以满足三位独立专家的共识条件。
+配置 v2 从 108 个复现钱包中审计 50 个，仍只留下 `betwick` 和 `0x06b2934b382d4429d50d7239ee375a76167f9f35` 两个机械候选。人工复核只把 `betwick` 保留为有条件的观察线索；第二个钱包匿名且主要交易短周期每日指数涨跌，不满足“跟了谁、为什么”的可解释要求。两者近期共享市场数为零，无法形成同事件共识。二者都不是已批准专家。
 
 ## 5. 交接时的动态快照
 
-以下快照来自 `2026-08-15T03:17:59Z` 左右。系统仍在运行，数字会继续变化；新对话必须用命令刷新，不要把本表当成当前真相。
+以下快照来自 `2026-08-15T21:18:24Z` 左右。系统仍在运行，数字会继续变化；新对话必须用命令刷新，不要把本表当成当前真相。
 
 | 层 | 当前值 | 晋级门槛/状态 |
 |---|---:|---|
-| M1 venue evidence | 1,352 样本，340.891 小时 | 机械门槛完成；Kalshi 质量合格，Polymarket US 顶部名义金额不合格 |
-| M2 runtime evidence | 1,277 合格周期，321.944 小时 | 机械晋级条件满足；待正式审查 |
-| M2 total cycles | 1,352 | 最近周期 1,352，状态正常 |
+| M1 venue evidence | 1,421 样本，358.791 小时 | 机械门槛完成；Kalshi 质量合格，Polymarket US 顶部名义金额不合格 |
+| M2 runtime evidence | 1,346 合格周期，339.844 小时 | 机械晋级条件满足；待正式审查 |
+| M2 total cycles | 1,421 | 最近周期 1,421，状态正常 |
 | M3 active segment | segment 3 / config v3 | 机械晋级条件满足；仍为 collecting，待正式审查 |
-| M3 segment 3 | 1,746 有效 intent，37 失败，225.281 小时 | 每个平台均超过 250，零 reconciliation error |
-| Polymarket US | 874 intent，19 失败 | 最新 probe recorded |
-| Kalshi | 872 intent，18 失败 | 最新 probe recorded |
+| M3 segment 3 | 1,884 有效 intent，37 失败，243.288 小时 | 每个平台均超过 250，零 reconciliation error |
+| Polymarket US | 943 intent，19 失败 | 最新 probe recorded |
+| Kalshi | 941 intent，18 失败 | 最新 probe recorded |
 | M3 reconciliation errors | 0 | 必须始终为 0 |
 | M3 pending probes | 0 | 正常 |
 | paper account frozen | false | 正常 |
 | SQLite integrity | ok | 正常 |
-| M4.1-A | 30 钱包完成机械审计，2 个待人工复核候选 | 无专家 cohort、无 signal、无 position |
+| M4.1-A2 | 50 钱包完成机械审计；1 个有条件观察线索，1 个匿名 watchlist | 无专家 cohort、无 signal、无 position |
 
 paper 账户的现金、可执行权益和持仓会随自然周期变化，不在交接文档复制陈旧数值；用 `m2.py status` 和权威 SQLite 重新查询。probe 持仓不是策略仓位或 alpha 证明。
 
-M1 还暴露出一个值得观察而不是立即“优化掉”的事实：Polymarket US 的 median top-quote notional 约为 USD 8.0，当前仍未满足选场流动性门槛。不要为了让 gate 变绿就降低标准。
+M1 还暴露出一个值得观察而不是立即“优化掉”的事实：Polymarket US 的 median top-quote notional 约为 USD 7.778，当前仍未满足选场流动性门槛。不要为了让 gate 变绿就降低标准。
 
 ## 6. 当前到底卡在哪里
 
 目前没有已知代码部署 blocker。系统正在正确地被以下证据门槛锁住：
 
 1. M1、M2、M3 的机械时间和样本门槛已经满足，但正式晋级审查尚未完成；Polymarket US 顶部可执行名义金额仍不合格。
-2. M4.1-A 只有两个待人工复核候选，无法满足三个独立专家的共识条件。
-3. 候选人的身份、钱包独立性、延迟可复制性和前瞻表现都未验证。
+2. M4.1-A2 只有一个有条件观察线索，无法满足三个独立专家的共识条件。
+3. 钱包所有权独立性、延迟可复制性和前瞻表现都未验证；匿名钱包不满足人工可解释门槛。
 4. M4 尚未建立任何经过时间对齐、成本调整和样本外验证的预测 alpha，也未产生交易信号。
 5. 美国地区、未来新加坡等司法辖区、Polymarket US/Kalshi/国际平台的实际账户和合法使用资格仍必须在接近实盘时重新核实。
 6. 远程 alert、实时 Bloomberg 式 dashboard 和随时随地查看界面尚未实现；目前以 CLI、SQLite 和日志为权威。
@@ -335,9 +335,9 @@ git diff --check
 3. 机械门槛已达到；下一步做冻结快照和对抗式晋级审查，而不是自动宣布通过。
 4. 任何 evidence-changing 修复都必须：暂停 M3 probe、在线备份、保留并归档旧 segment、修改并测试、新建 segment、重新启用、观察自然周期。
 
-### M4.1-A 已完成；下一步仍需用户批准
+### M4.1-A2 已完成；M4.1-B 实施前仍需用户批准
 
-M4 才开始回答“凭什么赚钱”。当前只完成候选钱包机械审计。下一步应先人工复核两个候选人的身份、策略类型和独立性，再决定扩大候选池的方法；在至少三个独立候选存在前，不构建共识信号：
+M4 才开始回答“凭什么赚钱”。排行榜由 30 扩到 50 后仍只有两个机械候选；人工复核后只有 Betwick 可作为有条件观察线索。下一步不应继续盲目扩大同一排行榜，而应先批准 M4.1-B 的同事件专家发现方法：从 Betwick 等参考钱包交易的目标事件反向寻找持续、可解释、可独立验证的同场钱包，并预先冻结身份、延迟和容量规则。在至少三个独立候选存在前，不构建共识信号：
 
 1. **专家/钱包行为信号**：研究特定交易者是否在控制存活偏差、入场延迟、仓位重建、可复制价格和费用后仍有增量价值。不能只挑当前排行榜赢家然后回看。
 2. **跨市场相对价值**：比较同一事件在不同合法平台或相关标的中的概率约束，前提是事件定义、结算规则和时间完全对齐。
