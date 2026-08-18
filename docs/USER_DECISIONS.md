@@ -92,6 +92,73 @@ The user approved higher M3 paper-intent density on 2026-08-04. M3 remains an ex
 
 Segment 2 is immutable diagnostic history. Configuration v3 starts segment 3 after the Polymarket binary-outcome ordering repair. The repair accepts exactly one Yes and one No in either order; it does not weaken product, market, event or theme identity checks.
 
+## Approved M4.1-A candidate-audit configuration version 1
+
+The user approved the expert-wallet candidate-audit plan on 2026-08-14. This stage is public-data research only: it does not freeze an expert cohort, create a consensus signal, connect to M2/M3, or create a paper position.
+
+| Control you can edit | Approved default | Effect of changing it |
+|---|---:|---|
+| Source categories | Politics, Economics, Finance | Changing the universe changes who can enter the candidate pool |
+| Leaderboard periods | Week, Month, All | Fewer periods weaken persistence evidence; more current-only emphasis raises winner selection bias |
+| Minimum appearances | 2 of 9 snapshots | Higher is more persistent but may exclude specialists |
+| Candidates audited / observation cap | 30 / 15 | Higher costs more public requests; the cap never forces weak wallets into the pool |
+| Recent trade window / limit | 30 days / 500 trades | Longer or deeper samples reduce recency but reveal more regime and domain drift |
+| Recent closed-position limit | 50 | The public endpoint cap makes all reported PnL metrics explicitly sample-limited |
+| Fill aggregation window | 30 minutes | Prevents fragmented fills from becoming repeated actions |
+| Material action floor | Greater of $100 and the wallet's sampled median aggregated action | A higher floor rejects noise but may miss small specialist wallets |
+| Maximum material actions per day | 10 | Enforces the low-frequency preference; higher values admit scanner-like behavior |
+| Target-domain minimum | 50% of recent trade notional and 50% of sampled closed positions | Higher means purer US politics/economics/finance/macro exposure |
+| Excluded-domain maximum | 10% for recent trade notional and sampled closed positions | Sports, esports, weather, culture, mentions and crypto-price markets remain out of scope |
+| Extreme-price maximum | 50% of sampled trades at or below 0.10 or at or above 0.90 | Lower values more aggressively reject near-resolution strategies |
+| Single-event absolute PnL maximum | 25% of sampled absolute event PnL | Aggregates multiple contracts by event so contract splitting cannot fake diversification |
+| Observation-pool admission | Every mechanical check must pass | Passing still requires manual identity and independence review |
+
+Changing these values now creates a new immutable candidate report and does not reset M1, M2 or M3. Once a cohort is manually approved and the prospective M4 clock starts, any universe, classification or threshold change requires a new M4 configuration version and restarts only that M4 evidence clock. Historical reports and raw evidence remain unchanged.
+
+## Approved M4.1-A2 candidate-audit configuration version 2
+
+The user approved a bounded expansion on 2026-08-15: audit up to 50 recurring wallets instead of 30. Every category, period, recurrence, domain, activity, extreme-price, concentration and observation-pool gate from version 1 remains unchanged. This is a discovery-depth change only; it creates a new immutable report, does not reset M1/M2/M3, does not start the prospective M4 clock and cannot promote a wallet to expert status.
+
+## Approved M4.1-B exact-market peer discovery configuration version 3
+
+The user approved exact-market peer discovery on 2026-08-15 and explicitly removed both a minimum probability-price rule and a requirement that markets remain more than 24 hours from resolution. Price and time to resolution may be recorded for later analysis but cannot admit or reject a peer.
+
+| Control you can edit | Approved default | Effect of changing it |
+|---|---:|---|
+| Reference wallets | Betwick | Changes the information neighborhood being explored; a new reference can produce a different candidate graph |
+| Historical discovery window | 90 days | Longer windows add regimes but increase stale-strategy risk |
+| Same-event identity | Exact `conditionId` | This is a safety boundary, not fuzzy title matching |
+| Direction agreement window | 6 hours | Wider windows increase recall and accidental agreement; this is not a holding-period rule |
+| Minimum repeated overlap | 3 distinct target markets | Repeated fills in one market cannot manufacture an expert |
+| Materiality floor | $100 estimated net directional notional after 30-minute netting | Removes dust and offsetting churn only; it is not a minimum share price |
+| Review depth | 20 candidates | Changes manual workload, not expert status |
+| Independent-expert target | 3 | Wallet count alone never proves independence |
+| Price admission rule | None | Prices from 0 through 1 remain eligible and are recorded |
+| Time-to-resolution admission rule | None | Near- and long-dated markets remain eligible |
+
+Configuration v3 is discovery-only. It does not freeze an expert cohort, start prospective tracking, create a signal, connect to M2/M3 or authorize a paper position. Starting that clock requires a named observation panel, an independence review and a separately approved tracking specification.
+
+## Approved M4.1-C prospective observation configuration version 4
+
+The user approved the prospective observation plan on 2026-08-18. The evidence clock started at `2026-08-18T20:22:28.504513Z`. This stage measures whether public wallet behavior remains useful after the delay and executable prices available to us; it does not assume the wallets are experts and cannot generate a signal, paper position or order.
+
+| Control you can edit in a future approved segment | Approved default | Effect of changing it |
+|---|---:|---|
+| Observation panel | Betwick; Kekkone; Tenebrus7; JasonPunos; PhilIvey9 | Changes the people and strategy families being tested; results from different panels cannot share one clock |
+| Panel roles | Reference; primary challenger; high-activity comparator; identity comparator; follower control | Changes the comparison question, not expert status |
+| Service cadence | 5 minutes | Controls delayed-quote timing and API load; it does not make wallet trades arrive sooner |
+| Public trade collection cadence | 15 minutes | Shorter reduces detection delay but increases requests; longer is cheaper but tests a slower follower |
+| Trade lookback per collection | 2 hours | Must exceed the aggregation and collection buffer; too short can miss late API observations |
+| Net-action window | 30 minutes | Larger windows combine more fragments but increase detection delay; smaller windows can count one thesis multiple times |
+| Material net-directional floor | $100 | Removes dust and near-offsetting churn; it is not a probability-price gate |
+| Delayed comparison quote | 5 minutes after our first detected action quote | Measures additional decay after detection; the actual scheduled delay is recorded |
+| Observation minimum | 30 days | Shorter is faster but more regime-sensitive; longer delays review but adds regimes |
+| Resolved-action minimum | 30 material actions per panel wallet | Sparse wallets may remain under review beyond 30 days instead of being silently treated as failures or experts |
+| Price admission rule | None | All valid prices remain observable; price is evidence, not an eligibility filter |
+| Time-to-resolution admission rule | None | Near- and long-dated markets remain observable; time to resolution is recorded only |
+
+Configuration v4 is frozen inside the append-only hash-chained evidence log. Changing any panel member, title universe, cadence, threshold, delay or gate now is an evidence-changing action: preserve the old log and raw captures, obtain approval, design a new M4 segment, and start only that new clock. The M2/M3 evidence clocks and SQLite are independent.
+
 ## Boundaries that are not preference knobs
 
 - No look-ahead or favorable selection among later books.
@@ -100,3 +167,4 @@ Segment 2 is immutable diagnostic history. Configuration v3 starts segment 3 aft
 - No missing fee, latency, partial-fill or settlement accounting.
 - No strategy or LLM changing its own risk or promotion test.
 - No credential, live endpoint or active-service change without its separate approval.
+- No candidate wallet may label itself an expert, satisfy the three-independent-expert rule, or authorize a trade without separate approved M4 stages.
