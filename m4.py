@@ -1,13 +1,16 @@
 #!/opt/homebrew/bin/python3.11
 import argparse
 import concurrent.futures
+import fcntl
 import hashlib
 import json
+import os
 import re
 import statistics
 import urllib.parse
 import urllib.request
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,10 +22,17 @@ CONFIG_PATH = ROOT / "config" / "m4.json"
 RUNTIME = ROOT / "runtime" / "m2" / "research" / "m4"
 LATEST_REPORT_PATH = RUNTIME / "candidate-audit-latest.json"
 LATEST_PEER_REPORT_PATH = RUNTIME / "peer-discovery-latest.json"
+TRACKING_RUNTIME = RUNTIME / "prospective"
+TRACKING_LOG_PATH = TRACKING_RUNTIME / "evidence.jsonl"
+TRACKING_LOCK_PATH = TRACKING_RUNTIME / "writer.lock"
+TRACKING_RAW_DIR = TRACKING_RUNTIME / "raw"
 DATA_API = "https://data-api.polymarket.com"
 PROFILE_API = "https://gamma-api.polymarket.com/public-profile"
+CLOB_API = "https://clob.polymarket.com"
+GAMMA_MARKETS_API = "https://gamma-api.polymarket.com/markets"
 WALLET_PATTERN = re.compile(r"^0x[a-f0-9]{40}$")
 CONDITION_PATTERN = re.compile(r"^0x[a-f0-9]{64}$")
+TRANSACTION_PATTERN = re.compile(r"^0x[a-f0-9]{64}$")
 
 
 def utc_now():
@@ -65,6 +75,8 @@ def fraction(part, whole):
 
 
 def validate_config(config):
+    if config.get("version") != 4:
+        raise ValueError("M4 configuration version must be 4")
     if config.get("mode") != "candidate_audit" or config.get("paper_only") is not True:
         raise ValueError("M4.1-A must remain paper-only candidate_audit")
     if config.get("source") != "polymarket_public_data":
@@ -153,6 +165,70 @@ def validate_config(config):
         value = peer.get(key)
         if not isinstance(value, int) or not minimum <= value <= maximum:
             raise ValueError(f"peer_discovery.{key} must be from {minimum} to {maximum}")
+    tracking = config.get("prospective_tracking")
+    required_tracking_keys = {
+        "enabled",
+        "service_interval_seconds",
+        "trade_collection_interval_seconds",
+        "trade_lookback_seconds",
+        "delayed_quote_seconds",
+        "trade_limit_per_wallet",
+        "minimum_observation_days",
+        "minimum_resolved_material_actions_per_candidate",
+        "panel",
+    }
+    if not isinstance(tracking, dict) or set(tracking) != required_tracking_keys:
+        raise ValueError("M4.1-C prospective tracking configuration is incomplete or unknown")
+    if tracking["enabled"] is not True:
+        raise ValueError("M4.1-C prospective tracking must be explicitly enabled")
+    tracking_ranges = {
+        "service_interval_seconds": (60, 900),
+        "trade_collection_interval_seconds": (300, 3600),
+        "trade_lookback_seconds": (3600, 86400),
+        "delayed_quote_seconds": (60, 3600),
+        "trade_limit_per_wallet": (1, 10000),
+        "minimum_observation_days": (1, 3650),
+        "minimum_resolved_material_actions_per_candidate": (1, 10000),
+    }
+    for key, (minimum, maximum) in tracking_ranges.items():
+        value = tracking.get(key)
+        if not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValueError(f"prospective_tracking.{key} must be from {minimum} to {maximum}")
+    if tracking["trade_collection_interval_seconds"] % tracking["service_interval_seconds"]:
+        raise ValueError("trade collection interval must be divisible by service interval")
+    if tracking["delayed_quote_seconds"] < tracking["service_interval_seconds"]:
+        raise ValueError("delayed quote must allow at least one service interval")
+    minimum_lookback = (
+        config["aggregation_window_minutes"] * 60
+        + tracking["trade_collection_interval_seconds"]
+    )
+    if tracking["trade_lookback_seconds"] < minimum_lookback:
+        raise ValueError("trade lookback is too short to reconstruct a mature action")
+    panel = tracking["panel"]
+    required_roles = {
+        "reference",
+        "primary_challenger",
+        "high_activity_comparator",
+        "identity_comparator",
+        "follower_control",
+    }
+    if not isinstance(panel, list) or len(panel) != 5:
+        raise ValueError("prospective tracking panel must contain the five approved wallets")
+    if any(
+        not isinstance(row, dict)
+        or set(row) != {"name", "wallet", "role"}
+        or not isinstance(row["name"], str)
+        or not row["name"]
+        or not isinstance(row["wallet"], str)
+        or not WALLET_PATTERN.fullmatch(row["wallet"])
+        or row["role"] not in required_roles
+        for row in panel
+    ):
+        raise ValueError("prospective tracking panel entry is invalid")
+    if len({row["wallet"] for row in panel}) != 5 or {
+        row["role"] for row in panel
+    } != required_roles:
+        raise ValueError("prospective tracking wallets and roles must be unique")
     for key in ("target_terms", "excluded_terms"):
         values = config.get(key)
         if not isinstance(values, list) or not values or any(
@@ -180,6 +256,87 @@ def fetch_json(url, timeout):
 
 def api_url(base, params):
     return f"{base}?{urllib.parse.urlencode(params)}"
+
+
+def parse_utc(value):
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+@contextmanager
+def tracking_lock(path=TRACKING_LOCK_PATH):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("M4 tracking writer lock is already held") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def read_tracking_records(path=TRACKING_LOG_PATH):
+    if not path.exists():
+        return []
+    records, previous_hash, previous_time = [], None, None
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"corrupt M4 tracking record at line {line_number}") from exc
+        required = {
+            "sequence",
+            "previous_hash",
+            "recorded_at",
+            "record_type",
+            "payload",
+            "record_hash",
+        }
+        if not isinstance(record, dict) or set(record) != required:
+            raise ValueError(f"invalid M4 tracking record at line {line_number}")
+        observed_at = parse_utc(record["recorded_at"])
+        unsigned = {key: value for key, value in record.items() if key != "record_hash"}
+        expected_hash = content_hash(unsigned)
+        if (
+            record["sequence"] != line_number
+            or record["previous_hash"] != previous_hash
+            or record["record_hash"] != expected_hash
+            or (previous_time is not None and observed_at < previous_time)
+        ):
+            raise ValueError(f"broken M4 tracking evidence chain at line {line_number}")
+        records.append(record)
+        previous_hash = record["record_hash"]
+        previous_time = observed_at
+    return records
+
+
+def append_tracking_record(
+    record_type, payload, recorded_at, path=TRACKING_LOG_PATH, records=None
+):
+    records = read_tracking_records(path) if records is None else records
+    record = {
+        "sequence": len(records) + 1,
+        "previous_hash": records[-1]["record_hash"] if records else None,
+        "recorded_at": recorded_at.astimezone(timezone.utc).isoformat(),
+        "record_type": record_type,
+        "payload": payload,
+    }
+    record["record_hash"] = content_hash(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    records.append(record)
+    return record
+
+
+def tracking_configuration_hash(config):
+    return content_hash(config)
 
 
 def fetch_leaderboards(config):
@@ -391,6 +548,10 @@ def directional_actions(trades, config, start_timestamp=0, target_only=False):
                 "size": size,
                 "notional": price * size,
                 "price": price,
+                "asset": str(trade.get("asset") or ""),
+                "outcome": trade.get("outcome"),
+                "outcome_index": int(outcome_index),
+                "trade_key": trade.get("trade_key"),
                 "title": title,
                 "event_slug": trade.get("eventSlug"),
                 "name": trade.get("name"),
@@ -440,6 +601,30 @@ def directional_actions(trades, config, start_timestamp=0, target_only=False):
                 "gross_notional_usd": rounded(gross_notional),
                 "net_directional_notional_usd": rounded(net_directional_notional),
                 "net_contracts": rounded(abs(net_contracts)),
+                "source_trade_keys": sorted(
+                    row["trade_key"] for row in bucket if row["trade_key"]
+                ),
+                "observed_assets_by_outcome": {
+                    str(index): sorted(
+                        {
+                            row["asset"]
+                            for row in bucket
+                            if row["outcome_index"] == index and row["asset"]
+                        }
+                    )
+                    for index in (0, 1)
+                },
+                "observed_outcomes_by_index": {
+                    str(index): sorted(
+                        {
+                            str(row["outcome"])
+                            for row in bucket
+                            if row["outcome_index"] == index
+                            and row["outcome"] is not None
+                        }
+                    )
+                    for index in (0, 1)
+                },
                 "minimum_observed_price": rounded(min(row["price"] for row in bucket)),
                 "maximum_observed_price": rounded(max(row["price"] for row in bucket)),
                 "source_trade_count": len(bucket),
@@ -1099,6 +1284,741 @@ def write_peer_artifacts(raw, report, observed_at):
     return report_path, raw_path, report
 
 
+def tracking_start_record(records):
+    starts = [record for record in records if record["record_type"] == "tracking_started"]
+    if len(starts) != 1:
+        raise ValueError("M4 tracking evidence must contain exactly one start record")
+    return starts[0]
+
+
+def verify_tracking_configuration(records, config):
+    start = tracking_start_record(records)
+    if start["payload"]["configuration_hash"] != tracking_configuration_hash(config):
+        raise RuntimeError("M4 tracking configuration changed after the evidence clock started")
+    return start
+
+
+def initialize_tracking(config=None, observed_at=None, path=TRACKING_LOG_PATH):
+    config = validate_config(config or load_config())
+    observed_at = observed_at or utc_now()
+    with tracking_lock(path.with_name("writer.lock")):
+        records = read_tracking_records(path)
+        if records:
+            start = verify_tracking_configuration(records, config)
+            return start, False
+        start = append_tracking_record(
+            "tracking_started",
+            {
+                "configuration_version": config["version"],
+                "configuration_hash": tracking_configuration_hash(config),
+                "configuration": config,
+                "panel": config["prospective_tracking"]["panel"],
+                "price_admission_rule": "none",
+                "time_to_resolution_admission_rule": "none",
+                "signal_authorized": False,
+                "paper_position_authorized": False,
+            },
+            observed_at,
+            path=path,
+            records=records,
+        )
+    return start, True
+
+
+def fetch_tracking_sources(config, observed_at):
+    tracking = config["prospective_tracking"]
+    start = int(observed_at.timestamp()) - tracking["trade_lookback_seconds"]
+    end = int(observed_at.timestamp())
+    sources = {}
+
+    def fetch_wallet(row):
+        url = api_url(
+            f"{DATA_API}/trades",
+            {
+                "user": row["wallet"],
+                "start": start,
+                "end": end,
+                "limit": tracking["trade_limit_per_wallet"],
+                "takerOnly": "false",
+            },
+        )
+        payload = fetch_json(url, config["request_timeout_seconds"])
+        if not isinstance(payload, list):
+            raise ValueError("tracking trade response is not a list")
+        return row["wallet"], {"url": url, "trades": payload, "error": None}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {
+            pool.submit(fetch_wallet, row): row for row in tracking["panel"]
+        }
+        for future, row in futures.items():
+            try:
+                wallet, source = future.result()
+                sources[wallet] = source
+            except Exception as exc:
+                sources[row["wallet"]] = {
+                    "url": None,
+                    "trades": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+    return start, end, sources
+
+
+def write_tracking_raw_artifact(raw, observed_at, raw_dir=TRACKING_RAW_DIR):
+    stamp = observed_at.strftime("%Y%m%dT%H%M%S%fZ")
+    path = raw_dir / f"trades-{stamp}.json.gz"
+    m1.atomic_json(path, raw, compress=True)
+    return {
+        "path": str(path),
+        "content_sha256": content_hash(raw),
+        "file_sha256": file_hash(path),
+    }
+
+
+def normalize_tracking_trade(trade, panel_row, started_at, observed_at, config):
+    if not isinstance(trade, dict):
+        raise ValueError("trade is not an object")
+    wallet = str(trade.get("proxyWallet") or "").lower()
+    condition = str(trade.get("conditionId") or "").lower()
+    transaction = str(trade.get("transactionHash") or "").lower()
+    side = str(trade.get("side") or "").upper()
+    asset = str(trade.get("asset") or "")
+    outcome_index = number(trade.get("outcomeIndex"))
+    price = number(trade.get("price"))
+    size = number(trade.get("size"))
+    timestamp = number(trade.get("timestamp"))
+    if (
+        wallet != panel_row["wallet"]
+        or not CONDITION_PATTERN.fullmatch(condition)
+        or not TRANSACTION_PATTERN.fullmatch(transaction)
+        or side not in ("BUY", "SELL")
+        or not asset.isdigit()
+        or outcome_index not in (0, 1)
+        or price is None
+        or not 0 <= price <= 1
+        or size is None
+        or size <= 0
+        or timestamp is None
+        or timestamp > observed_at.timestamp() + 300
+    ):
+        raise ValueError("trade fields are invalid")
+    if timestamp < started_at.timestamp():
+        return "pre_start", None
+    title = str(trade.get("title") or "")
+    classification = classify_title(title, config)
+    normalized = {
+        "proxyWallet": wallet,
+        "conditionId": condition,
+        "transactionHash": transaction,
+        "side": side,
+        "asset": asset,
+        "outcomeIndex": int(outcome_index),
+        "outcome": trade.get("outcome"),
+        "price": price,
+        "size": size,
+        "timestamp": int(timestamp),
+        "title": title,
+        "slug": trade.get("slug"),
+        "eventSlug": trade.get("eventSlug"),
+        "name": trade.get("name"),
+        "pseudonym": trade.get("pseudonym"),
+    }
+    normalized["trade_key"] = content_hash(normalized)
+    return classification, normalized
+
+
+def json_array(value, name):
+    parsed = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(parsed, list) or len(parsed) != 2:
+        raise ValueError(f"market {name} must contain two values")
+    return parsed
+
+
+def fetch_exact_market(condition, timeout):
+    url = api_url(GAMMA_MARKETS_API, {"condition_ids": condition, "limit": 2})
+    payload = fetch_json(url, timeout)
+    if not isinstance(payload, list):
+        raise ValueError("market metadata response is not a list")
+    matches = [
+        row
+        for row in payload
+        if isinstance(row, dict)
+        and str(row.get("conditionId") or "").lower() == condition
+    ]
+    if len(matches) != 1:
+        raise ValueError("exact market metadata is missing or ambiguous")
+    market = matches[0]
+    outcomes = json_array(market.get("outcomes"), "outcomes")
+    tokens = [str(value) for value in json_array(market.get("clobTokenIds"), "tokens")]
+    if any(not token.isdigit() for token in tokens) or len(set(tokens)) != 2:
+        raise ValueError("market token identifiers are invalid")
+    return url, market, outcomes, tokens
+
+
+def normalized_book(book, condition, token):
+    if (
+        not isinstance(book, dict)
+        or str(book.get("market") or "").lower() != condition
+        or str(book.get("asset_id") or "") != token
+    ):
+        raise ValueError("order book identity does not match the exact market token")
+
+    def levels(name):
+        result = []
+        for row in book.get(name) or []:
+            price, size = number(row.get("price")), number(row.get("size"))
+            if price is None or size is None or not 0 <= price <= 1 or size <= 0:
+                raise ValueError(f"order book contains an invalid {name} level")
+            result.append((price, size))
+        return result
+
+    bids, asks = levels("bids"), levels("asks")
+    if not bids or not asks:
+        raise ValueError("order book is not two-sided")
+    best_bid = max(bids, key=lambda row: row[0])
+    best_ask = min(asks, key=lambda row: row[0])
+    if best_bid[0] > best_ask[0]:
+        raise ValueError("order book is crossed")
+    return {
+        "best_bid": rounded(best_bid[0]),
+        "best_bid_size": rounded(best_bid[1]),
+        "best_ask": rounded(best_ask[0]),
+        "best_ask_size": rounded(best_ask[1]),
+        "spread": rounded(best_ask[0] - best_bid[0]),
+        "tick_size": book.get("tick_size"),
+        "minimum_order_size": book.get("min_order_size"),
+    }
+
+
+def capture_executable_quote(condition, direction_outcome_index, config):
+    captured_at = utc_now()
+    result = {
+        "status": "unavailable",
+        "captured_at": captured_at.isoformat(),
+        "condition_id": condition,
+        "direction_outcome_index": direction_outcome_index,
+        "price_admission_gate": False,
+        "time_to_resolution_admission_gate": False,
+    }
+    try:
+        market_url, market, outcomes, tokens = fetch_exact_market(
+            condition, config["request_timeout_seconds"]
+        )
+        token = tokens[direction_outcome_index]
+        end_date = market.get("endDate") or market.get("endDateIso")
+        time_to_resolution = None
+        if end_date:
+            time_to_resolution = rounded(
+                (parse_utc(end_date) - captured_at).total_seconds()
+            )
+        result.update(
+            {
+                "market_url": market_url,
+                "market": market,
+                "outcomes": outcomes,
+                "token_id": token,
+                "outcome": outcomes[direction_outcome_index],
+                "end_date": end_date,
+                "time_to_resolution_seconds": time_to_resolution,
+            }
+        )
+        book_url = api_url(f"{CLOB_API}/book", {"token_id": token})
+        book = fetch_json(book_url, config["request_timeout_seconds"])
+        result.update(
+            {
+                "status": "recorded",
+                "book_url": book_url,
+                "book": book,
+                "executable": normalized_book(book, condition, token),
+                "error": None,
+            }
+        )
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def tracking_action_key(action):
+    return content_hash(
+        {
+            "wallet": action["wallet"],
+            "condition_id": action["condition_id"],
+            "started_at": action["started_at"],
+            "ended_at": action["ended_at"],
+            "direction_outcome_index": action["direction_outcome_index"],
+            "source_trade_keys": action["source_trade_keys"],
+        }
+    )
+
+
+def tracking_status_report(records, config, observed_at=None, path=TRACKING_LOG_PATH):
+    observed_at = observed_at or utc_now()
+    start = verify_tracking_configuration(records, config)
+    start_time = parse_utc(start["recorded_at"])
+    collections = [record for record in records if record["record_type"] == "collection"]
+    actions = [record for record in records if record["record_type"] == "action"]
+    delayed = [record for record in records if record["record_type"] == "delayed_quote"]
+    resolutions = [
+        record
+        for record in records
+        if record["record_type"] == "resolution_check"
+        and record["payload"]["status"] == "final"
+    ]
+    resolved_keys = {record["payload"]["action_key"] for record in resolutions}
+    panel = config["prospective_tracking"]["panel"]
+    by_wallet = {}
+    for row in panel:
+        wallet_actions = [
+            record for record in actions if record["payload"]["wallet"] == row["wallet"]
+        ]
+        by_wallet[row["wallet"]] = {
+            **row,
+            "expert_status": "not_approved",
+            "observed_trade_count": sum(
+                record["record_type"] == "trade_observed"
+                and record["payload"]["wallet"] == row["wallet"]
+                for record in records
+            ),
+            "material_action_count": len(wallet_actions),
+            "resolved_material_action_count": sum(
+                record["payload"]["action_key"] in resolved_keys
+                for record in wallet_actions
+            ),
+        }
+    tracking = config["prospective_tracking"]
+    elapsed_days = (observed_at - start_time).total_seconds() / 86400
+    last_collection_at = collections[-1]["recorded_at"] if collections else None
+    collection_age = (
+        (observed_at - parse_utc(last_collection_at)).total_seconds()
+        if last_collection_at
+        else None
+    )
+    review_ready = elapsed_days >= tracking["minimum_observation_days"] and all(
+        row["resolved_material_action_count"]
+        >= tracking["minimum_resolved_material_actions_per_candidate"]
+        for row in by_wallet.values()
+    )
+    return {
+        "status": (
+            "collecting"
+            if collection_age is None
+            or collection_age <= tracking["trade_collection_interval_seconds"] * 2
+            else "stale"
+        ),
+        "paper_only": True,
+        "configuration_version": config["version"],
+        "tracking_started_at": start["recorded_at"],
+        "elapsed_days": rounded(elapsed_days),
+        "last_collection_at": last_collection_at,
+        "last_collection_age_seconds": rounded(collection_age),
+        "collection_count": len(collections),
+        "evidence_record_count": len(records),
+        "delayed_quote_count": len(delayed),
+        "panel": list(by_wallet.values()),
+        "review_gate": {
+            "minimum_observation_days": tracking["minimum_observation_days"],
+            "minimum_resolved_material_actions_per_candidate": tracking[
+                "minimum_resolved_material_actions_per_candidate"
+            ],
+            "ready": review_ready,
+        },
+        "price_admission_rule": "none",
+        "time_to_resolution_admission_rule": "none",
+        "signal_authorized": False,
+        "paper_position_authorized": False,
+        "order_capability": False,
+        "evidence_path": str(path),
+    }
+
+
+def collect_tracking_trades(
+    records,
+    config,
+    observed_at,
+    path=TRACKING_LOG_PATH,
+    raw_dir=TRACKING_RAW_DIR,
+):
+    start_record = tracking_start_record(records)
+    started_at = parse_utc(start_record["recorded_at"])
+    start_timestamp, end_timestamp, sources = fetch_tracking_sources(config, observed_at)
+    raw = {
+        "observed_at": observed_at.isoformat(),
+        "configuration_hash": tracking_configuration_hash(config),
+        "start_timestamp": start_timestamp,
+        "end_timestamp": end_timestamp,
+        "sources": sources,
+    }
+    artifact = write_tracking_raw_artifact(raw, observed_at, raw_dir=raw_dir)
+    panel = {
+        row["wallet"]: row for row in config["prospective_tracking"]["panel"]
+    }
+    seen_trade_keys = {
+        record["payload"]["trade_key"]
+        for record in records
+        if record["record_type"] == "trade_observed"
+    }
+    summary, normalized_rows = {}, []
+    limit = config["prospective_tracking"]["trade_limit_per_wallet"]
+    for wallet, row in panel.items():
+        source = sources[wallet]
+        counts = {
+            "raw": len(source.get("trades") or []),
+            "target": 0,
+            "excluded": 0,
+            "unknown": 0,
+            "pre_start": 0,
+            "invalid": 0,
+            "new_target": 0,
+        }
+        for trade in source.get("trades") or []:
+            try:
+                classification, normalized = normalize_tracking_trade(
+                    trade, row, started_at, observed_at, config
+                )
+            except ValueError:
+                counts["invalid"] += 1
+                continue
+            counts[classification] += 1
+            if classification != "target" or normalized["trade_key"] in seen_trade_keys:
+                continue
+            seen_trade_keys.add(normalized["trade_key"])
+            counts["new_target"] += 1
+            normalized_rows.append((row, normalized))
+        summary[wallet] = {
+            **row,
+            "source_url": source.get("url"),
+            "error": source.get("error"),
+            "sample_at_limit": counts["raw"] >= limit,
+            "counts": counts,
+        }
+    partial = any(
+        row["error"] or row["sample_at_limit"] or row["counts"]["invalid"]
+        for row in summary.values()
+    )
+    collection = append_tracking_record(
+        "collection",
+        {
+            "status": "partial" if partial else "complete",
+            "artifact": artifact,
+            "wallets": summary,
+            "price_admission_gate": False,
+            "time_to_resolution_admission_gate": False,
+        },
+        observed_at,
+        path=path,
+        records=records,
+    )
+    for row, trade in sorted(
+        normalized_rows,
+        key=lambda item: (item[1]["timestamp"], item[1]["trade_key"]),
+    ):
+        append_tracking_record(
+            "trade_observed",
+            {
+                "trade_key": trade["trade_key"],
+                "wallet": row["wallet"],
+                "name": row["name"],
+                "role": row["role"],
+                "expert_status": "not_approved",
+                "first_seen_at": observed_at.isoformat(),
+                "collection_sequence": collection["sequence"],
+                "trade": trade,
+            },
+            observed_at,
+            path=path,
+            records=records,
+        )
+    return "partial" if partial else "complete"
+
+
+def emit_mature_tracking_actions(
+    records,
+    config,
+    observed_at,
+    path=TRACKING_LOG_PATH,
+    quote_capture=None,
+):
+    quote_capture = quote_capture or capture_executable_quote
+    start = tracking_start_record(records)
+    started_at = parse_utc(start["recorded_at"])
+    panel = {
+        row["wallet"]: row for row in config["prospective_tracking"]["panel"]
+    }
+    trades = [
+        record["payload"]["trade"]
+        for record in records
+        if record["record_type"] == "trade_observed"
+    ]
+    actions = directional_actions(
+        trades,
+        config,
+        start_timestamp=int(started_at.timestamp()),
+        target_only=True,
+    )
+    emitted = {
+        record["payload"]["action_key"]
+        for record in records
+        if record["record_type"] == "action"
+    }
+    maturity_seconds = (
+        config["aggregation_window_minutes"] * 60
+        + config["prospective_tracking"]["trade_collection_interval_seconds"]
+    )
+    emitted_count = 0
+    for action in sorted(actions, key=lambda row: (row["started_at"], row["wallet"])):
+        action_key = tracking_action_key(action)
+        if (
+            action_key in emitted
+            or observed_at.timestamp() < action["started_at"] + maturity_seconds
+        ):
+            continue
+        row = panel[action["wallet"]]
+        quote = quote_capture(
+            action["condition_id"], action["direction_outcome_index"], config
+        )
+        append_tracking_record(
+            "action",
+            {
+                **action,
+                "action_key": action_key,
+                "name": row["name"],
+                "role": row["role"],
+                "expert_status": "not_approved",
+                "detected_at": observed_at.isoformat(),
+                "aggregation_and_detection_delay_seconds": rounded(
+                    observed_at.timestamp() - action["started_at"]
+                ),
+                "why": (
+                    f"Observed a mature 30-minute net directional action from {row['name']} "
+                    f"({row['role']}); this is candidate evidence, not an expert thesis or signal."
+                ),
+                "immediate_executable_quote": quote,
+                "delayed_quote_due_at": (
+                    observed_at
+                    + timedelta(
+                        seconds=config["prospective_tracking"]["delayed_quote_seconds"]
+                    )
+                ).isoformat(),
+                "signal_authorized": False,
+                "paper_position_authorized": False,
+            },
+            observed_at,
+            path=path,
+            records=records,
+        )
+        emitted.add(action_key)
+        emitted_count += 1
+    return emitted_count
+
+
+def emit_due_delayed_quotes(
+    records,
+    config,
+    observed_at,
+    path=TRACKING_LOG_PATH,
+    quote_capture=None,
+):
+    quote_capture = quote_capture or capture_executable_quote
+    quoted = {
+        record["payload"]["action_key"]
+        for record in records
+        if record["record_type"] == "delayed_quote"
+    }
+    count = 0
+    for record in list(records):
+        if record["record_type"] != "action":
+            continue
+        action = record["payload"]
+        if (
+            action["action_key"] in quoted
+            or parse_utc(action["delayed_quote_due_at"]) > observed_at
+        ):
+            continue
+        quote = quote_capture(
+            action["condition_id"], action["direction_outcome_index"], config
+        )
+        append_tracking_record(
+            "delayed_quote",
+            {
+                "action_key": action["action_key"],
+                "wallet": action["wallet"],
+                "name": action["name"],
+                "condition_id": action["condition_id"],
+                "scheduled_for": action["delayed_quote_due_at"],
+                "actual_delay_seconds": rounded(
+                    (observed_at - parse_utc(action["detected_at"])).total_seconds()
+                ),
+                "quote": quote,
+                "signal_authorized": False,
+            },
+            observed_at,
+            path=path,
+            records=records,
+        )
+        quoted.add(action["action_key"])
+        count += 1
+    return count
+
+
+def capture_resolution(condition, config):
+    captured_at = utc_now()
+    result = {
+        "status": "unavailable",
+        "captured_at": captured_at.isoformat(),
+        "condition_id": condition,
+    }
+    try:
+        url, market, outcomes, _ = fetch_exact_market(
+            condition, config["request_timeout_seconds"]
+        )
+        prices = [number(value) for value in json_array(market.get("outcomePrices"), "prices")]
+        final = market.get("closed") is True and sorted(prices) == [0.0, 1.0]
+        result.update(
+            {
+                "status": "final" if final else "nonfinal",
+                "market_url": url,
+                "market": market,
+                "outcomes": outcomes,
+                "outcome_prices": prices,
+                "winning_outcome_index": prices.index(1.0) if final else None,
+                "error": None,
+            }
+        )
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def emit_due_resolution_checks(
+    records,
+    config,
+    observed_at,
+    path=TRACKING_LOG_PATH,
+    resolution_capture=None,
+):
+    resolution_capture = resolution_capture or capture_resolution
+    actions = [record for record in records if record["record_type"] == "action"]
+    latest, final = {}, set()
+    for record in records:
+        if record["record_type"] != "resolution_check":
+            continue
+        latest[record["payload"]["action_key"]] = parse_utc(record["recorded_at"])
+        if record["payload"]["status"] == "final":
+            final.add(record["payload"]["action_key"])
+    count = 0
+    for record in actions:
+        action = record["payload"]
+        key = action["action_key"]
+        if key in final:
+            continue
+        end_date = action["immediate_executable_quote"].get("end_date")
+        due = (
+            parse_utc(end_date) <= observed_at
+            if end_date
+            else observed_at - parse_utc(action["detected_at"]) >= timedelta(hours=6)
+        )
+        # ponytail: six-hour retry cadence avoids polling every market every five minutes.
+        if not due or (
+            key in latest and observed_at - latest[key] < timedelta(hours=6)
+        ):
+            continue
+        resolution = resolution_capture(action["condition_id"], config)
+        append_tracking_record(
+            "resolution_check",
+            {
+                "action_key": key,
+                "wallet": action["wallet"],
+                **resolution,
+            },
+            observed_at,
+            path=path,
+            records=records,
+        )
+        count += 1
+    return count
+
+
+def tracking_cycle(
+    config=None,
+    observed_at=None,
+    path=TRACKING_LOG_PATH,
+    raw_dir=TRACKING_RAW_DIR,
+):
+    config = validate_config(config or load_config())
+    observed_at = observed_at or utc_now()
+    with tracking_lock(path.with_name("writer.lock")):
+        records = read_tracking_records(path)
+        verify_tracking_configuration(records, config)
+        emit_due_delayed_quotes(records, config, observed_at, path=path)
+        last_collections = [
+            record for record in records if record["record_type"] == "collection"
+        ]
+        collection_due = not last_collections or (
+            observed_at - parse_utc(last_collections[-1]["recorded_at"])
+        ).total_seconds() >= config["prospective_tracking"][
+            "trade_collection_interval_seconds"
+        ]
+        cycle_status = "idle"
+        if collection_due:
+            cycle_status = collect_tracking_trades(
+                records, config, observed_at, path=path, raw_dir=raw_dir
+            )
+            emit_mature_tracking_actions(records, config, observed_at, path=path)
+        emit_due_resolution_checks(records, config, observed_at, path=path)
+        report = tracking_status_report(
+            records, config, observed_at=observed_at, path=path
+        )
+        report["cycle_status"] = cycle_status
+    return report
+
+
+def run_tracking_init():
+    start, created = initialize_tracking()
+    print(
+        json.dumps(
+            {
+                "status": "started" if created else "already_started",
+                "tracking_started_at": start["recorded_at"],
+                "configuration_version": start["payload"]["configuration_version"],
+                "evidence_path": str(TRACKING_LOG_PATH),
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def run_tracking_cycle():
+    report = tracking_cycle()
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 1 if report["cycle_status"] == "partial" else 0
+
+
+def show_tracking_status():
+    try:
+        config = validate_config(load_config())
+        records = read_tracking_records()
+        if not records:
+            print(
+                json.dumps(
+                    {"status": "not_started", "evidence_path": str(TRACKING_LOG_PATH)},
+                    indent=2,
+                )
+            )
+            return 1
+        report = tracking_status_report(records, config, path=TRACKING_LOG_PATH)
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0 if report["status"] == "collecting" else 1
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"status": "unhealthy", "reason": f"{type(exc).__name__}: {exc}"},
+                indent=2,
+            )
+        )
+        return 1
+
+
 def run_peer_discovery(config=None):
     config = validate_config(config or load_config())
     observed_at = utc_now()
@@ -1217,9 +2137,18 @@ def check():
                 "mode": config["mode"],
                 "paper_only": config["paper_only"],
                 "source_hosts": ["data-api.polymarket.com", "gamma-api.polymarket.com"],
+                "prospective_tracking_enabled": config["prospective_tracking"][
+                    "enabled"
+                ],
+                "tracking_service_interval_seconds": config["prospective_tracking"][
+                    "service_interval_seconds"
+                ],
+                "trade_collection_interval_seconds": config[
+                    "prospective_tracking"
+                ]["trade_collection_interval_seconds"],
                 "peer_price_gate": False,
                 "peer_time_to_resolution_gate": False,
-                "runtime_integration": False,
+                "m2_m3_runtime_integration": False,
                 "order_capability": False,
             },
             indent=2,
@@ -1231,7 +2160,17 @@ def check():
 def main():
     parser = argparse.ArgumentParser(description="M4 public expert-wallet research")
     parser.add_argument(
-        "command", choices=("audit", "status", "peers", "peer-status", "check")
+        "command",
+        choices=(
+            "audit",
+            "status",
+            "peers",
+            "peer-status",
+            "tracking-init",
+            "tracking-cycle",
+            "tracking-status",
+            "check",
+        ),
     )
     command = parser.parse_args().command
     if command == "audit":
@@ -1242,6 +2181,12 @@ def main():
         return run_peer_discovery()
     if command == "peer-status":
         return show_peer_status()
+    if command == "tracking-init":
+        return run_tracking_init()
+    if command == "tracking-cycle":
+        return run_tracking_cycle()
+    if command == "tracking-status":
+        return show_tracking_status()
     return check()
 
 

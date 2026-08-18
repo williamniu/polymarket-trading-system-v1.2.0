@@ -375,3 +375,41 @@ Residual gates:
 - Kekkone's recent trades and closed positions are capped; Betwick's known drawdown and strategy drift remain relevant;
 - a named observation panel, collection cadence, position reconstruction, delayed executable quote, benchmark and falsification rule must be approved before prospective tracking begins;
 - no signal, order, paper position, credential, M2/M3 integration or real-capital path exists.
+
+## M4.1-C prospective expert-wallet observation
+
+Date: 2026-08-18
+
+Decision: **PASS for isolated prospective evidence collection; FAIL for expert approval, alpha, paper positions or orders.** Configuration v4 converts the approved five-wallet panel into a time-forward measurement process. It cannot promote a wallet or trade.
+
+Verified attacks and controls:
+
+- the complete configuration and five roles are frozen into the first hash-chained record; later configuration drift fails closed instead of sharing the old clock;
+- only post-clock trades can become evidence; the first natural cycle explicitly excluded 19 earlier Tenebrus7 trades;
+- five public trade sources are collected independently every 15 minutes, while the five-minute service cadence exists only to capture due delayed quotes and resolution checks;
+- exact `conditionId`, Gamma market identity, outcome-index-to-token mapping and CLOB book identity must all agree before a quote is marked recorded;
+- executable best bid and ask are preserved from the actual order book; midpoint, unlimited depth and favorable later-book selection are not substituted;
+- 30-minute fill netting plus a one-collection buffer delays action detection conservatively and prevents fragmented fills or brief offsetting churn from becoming repeated calls;
+- the quote available when our mature action is detected and the first service quote at or after five minutes are both timestamped; actual delay is retained;
+- price and time to resolution are observations, never admission gates;
+- source errors, invalid trades and API-limit hits mark the collection partial and produce a nonzero service exit;
+- raw compressed source batches carry canonical-content and gzip-file SHA-256 values; the append-only JSONL chain verifies sequence, timestamps and previous-record hashes;
+- the M4 writer uses a separate lock and ignored evidence directory and never opens M2/M3 SQLite;
+- all panel members remain `not_approved`, and every action record hard-codes `signal_authorized=false` and `paper_position_authorized=false`.
+
+Deployment evidence:
+
+- all 91 repository tests pass under Homebrew Python 3.11, including 21 focused M4 tests;
+- `com.williamniu.polymarket-m4` completed two natural wakes with `runs=2` and `last exit code=0`; the second correctly returned idle without manufacturing a 15-minute collection;
+- tracking started at `2026-08-18T20:22:28.504513Z`; collection one completed at `2026-08-18T20:22:44.976614Z` with all five sources successful and no API limit hit;
+- raw file SHA-256 `25781fbcc072f029d5993a8fe6303f7f2485dc12f6a93f7eab83ae63efcdd577` and canonical content SHA-256 `41c02004faffe5a71196a039ea1dafa2f0ae432f2116081f37bc86a10533b05d` independently re-verified;
+- after deployment, M2 remained healthy at cycle 1703 and M3 segment 3 had 2,446 valid intents, 38 failed probes, zero reconciliation errors, zero pending probes and an unfrozen paper account.
+
+Residual gates:
+
+- zero post-clock target trades and zero material actions at startup are expected and prove nothing about future activity;
+- public API publication delay can exceed the one-collection buffer; observed source time, first-seen time and executable quote time must remain separate in later analysis;
+- net exposure change is observable, but a wallet's private thesis, full capital base, hedges elsewhere and beneficial owner remain unknown;
+- the 30-day and 30-resolved-action-per-wallet gate has not begun to mature; sparse panel members may require longer observation or a separately approved later segment;
+- outcomes alone are insufficient: later scoring still needs a frozen benchmark, capacity/fees, correlation controls and time-ordered holdout rules;
+- no consensus formula, holding rule, strategy position, paper signal, order, credential or real-capital path is authorized.

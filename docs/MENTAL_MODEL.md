@@ -35,13 +35,15 @@ flowchart TD
 | M1 | At least one legal venue has sufficiently reliable, structured, executable public data | Mechanical gate met; Kalshi passes the configured quality screen, while formal review and legal/account eligibility remain | Insufficient rules, quotes, depth, availability, or legal/account eligibility |
 | M2 | One Mac can preserve state and detect failure continuously | Deployed paper-only and mechanically eligible; formal promotion review remains | Duplicate writer, stale heartbeat, corrupt state, unrecoverable restart, missed schedule |
 | M3 | Paper fills and position lifecycles resemble possible real outcomes | M3.7 is mechanically eligible with zero reconciliation errors; formal promotion review remains | Midpoint fills, optimistic queue, stranded positions, guessed settlements, ignored fees/latency/depth, or one venue hiding another |
-| M4 | A signal has incremental predictive value after costs | M4.1-B found exact-market peer candidates; Betwick and Kekkone are observation leads, but no three-expert cohort or signal exists | Look-ahead, selection bias, linked wallets, follower chains, delay decay, regime dependence, or negative out-of-sample value |
+| M4 | A signal has incremental predictive value after costs | M4.1-C is prospectively observing five candidate/control wallets; no wallet is approved and no signal exists | Look-ahead, selection bias, linked wallets, follower chains, delay decay, regime dependence, or negative out-of-sample value |
 | M5-M6 | The system can improve without grading or rewriting its own safety test | Not built | Self-promotion, test weakening, leakage, or failed rollback |
 | M7 | Small live capital can be operated legally and safely | Locked | Any missing prior gate or missing fresh approval |
 
 The correct current statement is: **we have improved the quality of future learning, not proved profitability.**
 
 At `2026-08-15T22:43:34Z`, configuration v3 used Betwick's 166 material target actions across 31 exact markets to generate 65 mechanical peers and 20 review rows. API requests and local action filters share the same 90-day window. Materiality uses net directional exposure, so offsetting gross volume cannot fake a view. No price or time-to-resolution gate was applied. Kekkone is the strongest new observation lead: six shared target markets, ten matching actions, public X linkage and no sub-minute matches with Betwick, but its public samples are truncated and beneficial-owner independence is unproved. PhilIvey9 matched 15 times across seven markets, always 22 seconds after Betwick at the median and always within one minute; it is therefore a follower-control candidate, not independent expert evidence. Twenty-three market samples hit the public 10,000-row cap, so presence is evidence while absence is not. The user's three-independent-expert hypothesis still cannot emit a signal.
+
+At `2026-08-18T20:22:28Z`, configuration v4 began a separate prospective M4 clock for Betwick, Kekkone, Tenebrus7, JasonPunos and PhilIvey9. A five-minute LaunchAgent checks due work; public trades are fetched every 15 minutes, fragmented activity is netted over 30 minutes, and the system records the real best bid/ask when an action becomes observable to us plus another quote five minutes later. Exact market and token identities must agree, raw source batches are immutable, and the JSONL evidence chain is append-only and hash-linked. The first natural collection completed for all five sources with no source error; 19 pre-clock Tenebrus7 trades were correctly excluded. This is now a clean experiment clock, not evidence that the strategy works.
 
 M3 segment 1 proved that execution evidence could be recorded, but its broad-market lookup stranded a finalized Kalshi position. Its 46 valid intents and 30 failures are retained as diagnostic history and excluded from promotion. Segment 2 and its repair evidence are also retained; segment 3 is the current promotion boundary and has met its mechanical time, venue-count and reconciliation gates pending formal review.
 
@@ -69,13 +71,14 @@ By cycle 464, segment 3 had nine valid intents and one visible Kalshi rejection 
 | A live database file might be copied inconsistently | SQLite online backup plus integrity check | Recovery evidence is meaningful |
 | Service installation could be mistaken for service operation | The write-once M2 clock starts inside the first launchd `service-cycle`; two planned cycles and exit codes were observed | Runtime claims now begin with actual execution |
 
-## The three evidence clocks
+## The four evidence clocks
 
 Keep these separate in your mind:
 
 1. **Venue clock (M1):** imported M1 samples and future M2 collection both test whether the market-data venue is usable.
 2. **Runtime clock (M2):** starts once, at the actual M2 service cutover. Imported history and manual probes do not count toward its 168-hour/600-cycle gate.
 3. **Execution clock (M3):** starts with the first finalized runtime paper intent in the active evidence segment. A correctness repair archives the old segment and starts a fresh clock without deleting its orders, failures or lessons.
+4. **Alpha-observation clock (M4):** starts only after the panel and measurement rules are frozen. Historical discovery cannot count; a changed wallet, universe, cadence, delay or threshold requires a preserved old segment and a new approved M4 clock.
 
 This separation prevents a classic self-deception: using data quality to claim infrastructure reliability, or using infrastructure uptime to claim realistic execution.
 

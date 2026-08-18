@@ -1,9 +1,11 @@
 import copy
 import hashlib
+import json
+import plistlib
 import tempfile
 import unittest
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -43,10 +45,24 @@ class M4Test(unittest.TestCase):
 
     def test_configuration_is_public_paper_only_and_excludes_sports(self):
         self.assertEqual(m4.validate_config(self.config), self.config)
-        self.assertEqual(self.config["version"], 3)
+        self.assertEqual(self.config["version"], 4)
         self.assertEqual(self.config["maximum_candidates_to_audit"], 50)
         self.assertNotIn("price", self.config["peer_discovery"])
         self.assertNotIn("minimum_hours_to_resolution", self.config["peer_discovery"])
+        tracking = self.config["prospective_tracking"]
+        self.assertEqual(len(tracking["panel"]), 5)
+        self.assertEqual(
+            {row["role"] for row in tracking["panel"]},
+            {
+                "reference",
+                "primary_challenger",
+                "high_activity_comparator",
+                "identity_comparator",
+                "follower_control",
+            },
+        )
+        self.assertNotIn("price", tracking)
+        self.assertNotIn("minimum_hours_to_resolution", tracking)
         self.assertTrue(self.config["paper_only"])
         self.assertEqual(
             set(self.config["categories"]), {"POLITICS", "ECONOMICS", "FINANCE"}
@@ -378,6 +394,158 @@ class M4Test(unittest.TestCase):
         self.assertEqual(report["observation_pool"], [])
         self.assertEqual(report["method"]["profitability_claim"], "none")
         self.assertIn("prospective", report["method"]["future_use"])
+
+    def test_tracking_launch_agent_is_independent_and_uses_python_311(self):
+        with (ROOT / "ops" / "com.williamniu.polymarket-m4.plist").open("rb") as handle:
+            agent = plistlib.load(handle)
+        tracking = self.config["prospective_tracking"]
+        self.assertEqual(agent["ProgramArguments"][0], "/opt/homebrew/bin/python3.11")
+        self.assertEqual(agent["ProgramArguments"][2], "tracking-cycle")
+        self.assertEqual(agent["StartInterval"], tracking["service_interval_seconds"])
+        self.assertTrue(agent["RunAtLoad"])
+        self.assertNotIn("KeepAlive", agent)
+
+    def test_tracking_log_is_append_only_hash_chained_and_fails_closed(self):
+        now = datetime(2026, 8, 18, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.jsonl"
+            records = []
+            m4.append_tracking_record("one", {"value": 1}, now, path, records)
+            m4.append_tracking_record(
+                "two", {"value": 2}, now + timedelta(seconds=1), path, records
+            )
+            self.assertEqual(m4.read_tracking_records(path), records)
+            lines = path.read_text(encoding="utf-8").splitlines()
+            tampered = json.loads(lines[0])
+            tampered["payload"]["value"] = 9
+            lines[0] = json.dumps(tampered)
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "broken M4 tracking evidence chain"):
+                m4.read_tracking_records(path)
+
+    def test_tracking_configuration_is_frozen_after_clock_start(self):
+        now = datetime(2026, 8, 18, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.jsonl"
+            start, created = m4.initialize_tracking(self.config, now, path)
+            self.assertTrue(created)
+            again, created = m4.initialize_tracking(self.config, now, path)
+            self.assertFalse(created)
+            self.assertEqual(again["record_hash"], start["record_hash"])
+            changed = copy.deepcopy(self.config)
+            changed["prospective_tracking"]["delayed_quote_seconds"] = 600
+            with self.assertRaisesRegex(RuntimeError, "configuration changed"):
+                m4.initialize_tracking(changed, now, path)
+
+    def test_order_book_requires_exact_identity_and_real_executable_sides(self):
+        condition, token = "0x" + "a" * 64, "123"
+        book = {
+            "market": condition,
+            "asset_id": token,
+            "bids": [
+                {"price": "0.40", "size": "10"},
+                {"price": "0.45", "size": "20"},
+            ],
+            "asks": [
+                {"price": "0.60", "size": "30"},
+                {"price": "0.55", "size": "40"},
+            ],
+            "tick_size": "0.01",
+            "min_order_size": "5",
+        }
+        result = m4.normalized_book(book, condition, token)
+        self.assertEqual(result["best_bid"], 0.45)
+        self.assertEqual(result["best_ask"], 0.55)
+        self.assertEqual(result["spread"], 0.1)
+        with self.assertRaisesRegex(ValueError, "identity"):
+            m4.normalized_book({**book, "asset_id": "456"}, condition, token)
+        with self.assertRaisesRegex(ValueError, "crossed"):
+            m4.normalized_book(
+                {
+                    **book,
+                    "bids": [{"price": "0.70", "size": "10"}],
+                    "asks": [{"price": "0.60", "size": "10"}],
+                },
+                condition,
+                token,
+            )
+
+    def test_tracking_cycle_reconstructs_then_delays_without_a_signal(self):
+        start = datetime(2026, 8, 18, tzinfo=timezone.utc)
+        panel = self.config["prospective_tracking"]["panel"]
+        wallet = panel[0]["wallet"]
+        condition = "0x" + "a" * 64
+        trade = {
+            "proxyWallet": wallet,
+            "conditionId": condition,
+            "transactionHash": "0x" + "b" * 64,
+            "side": "BUY",
+            "asset": "123",
+            "outcomeIndex": 0,
+            "outcome": "Yes",
+            "price": 0.5,
+            "size": 300,
+            "timestamp": int((start + timedelta(seconds=60)).timestamp()),
+            "title": "Will the Fed cut interest rates?",
+            "slug": "fed-cut",
+            "eventSlug": "fed-cut-event",
+        }
+
+        def sources(config, observed_at):
+            rows = {
+                row["wallet"]: {
+                    "url": f"https://example.invalid/{row['wallet']}",
+                    "trades": [trade] if row["wallet"] == wallet else [],
+                    "error": None,
+                }
+                for row in panel
+            }
+            return 0, int(observed_at.timestamp()), rows
+
+        def quote(condition_id, outcome_index, config):
+            self.assertEqual(condition_id, condition)
+            self.assertEqual(outcome_index, 0)
+            return {
+                "status": "recorded",
+                "captured_at": start.isoformat(),
+                "condition_id": condition_id,
+                "direction_outcome_index": outcome_index,
+                "end_date": (start + timedelta(days=60)).isoformat(),
+                "executable": {"best_bid": 0.49, "best_ask": 0.51},
+                "price_admission_gate": False,
+                "time_to_resolution_admission_gate": False,
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path, raw = root / "evidence.jsonl", root / "raw"
+            m4.initialize_tracking(self.config, start, path)
+            with mock.patch.object(m4, "fetch_tracking_sources", side_effect=sources), mock.patch.object(
+                m4, "capture_executable_quote", side_effect=quote
+            ):
+                first = m4.tracking_cycle(
+                    self.config, start + timedelta(seconds=900), path, raw
+                )
+                second = m4.tracking_cycle(
+                    self.config, start + timedelta(seconds=2800), path, raw
+                )
+                third = m4.tracking_cycle(
+                    self.config, start + timedelta(seconds=3100), path, raw
+                )
+            records = m4.read_tracking_records(path)
+            self.assertEqual(first["cycle_status"], "complete")
+            self.assertEqual(second["cycle_status"], "complete")
+            self.assertEqual(third["cycle_status"], "idle")
+            self.assertEqual(sum(row["record_type"] == "action" for row in records), 1)
+            self.assertEqual(
+                sum(row["record_type"] == "delayed_quote" for row in records), 1
+            )
+            self.assertEqual(len(list(raw.glob("trades-*.json.gz"))), 2)
+            action = next(row for row in records if row["record_type"] == "action")
+            self.assertFalse(action["payload"]["signal_authorized"])
+            self.assertFalse(action["payload"]["paper_position_authorized"])
+            self.assertFalse(third["review_gate"]["ready"])
+            self.assertEqual(third["evidence_path"], str(path))
 
     def test_source_contains_no_order_or_credential_capability(self):
         source = (ROOT / "m4.py").read_text(encoding="utf-8").lower()

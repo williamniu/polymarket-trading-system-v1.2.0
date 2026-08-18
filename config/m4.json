@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "mode": "candidate_audit",
   "paper_only": true,
   "source": "polymarket_public_data",
@@ -37,6 +37,43 @@
     "market_trade_limit": 10000,
     "maximum_candidates_to_review": 20,
     "required_independent_experts": 3
+  },
+  "prospective_tracking": {
+    "enabled": true,
+    "service_interval_seconds": 300,
+    "trade_collection_interval_seconds": 900,
+    "trade_lookback_seconds": 7200,
+    "delayed_quote_seconds": 300,
+    "trade_limit_per_wallet": 1000,
+    "minimum_observation_days": 30,
+    "minimum_resolved_material_actions_per_candidate": 30,
+    "panel": [
+      {
+        "name": "Betwick",
+        "wallet": "0xc851cd9bee7d262afd78674f861f9f576a12cd2a",
+        "role": "reference"
+      },
+      {
+        "name": "kekkone",
+        "wallet": "0x39d0f1dca6fb7e5514858c1a337724a426764fe8",
+        "role": "primary_challenger"
+      },
+      {
+        "name": "Tenebrus7",
+        "wallet": "0xa8c63f775ddbbe66b56614191747def3021444e8",
+        "role": "high_activity_comparator"
+      },
+      {
+        "name": "JasonPunos",
+        "wallet": "0x47ae6d13566c3418c4795c98ced1f197575eee94",
+        "role": "identity_comparator"
+      },
+      {
+        "name": "PhilIvey9",
+        "wallet": "0xdde1a0257ddcc19522df5128049ce5619944f1d7",
+        "role": "follower_control"
+      }
+    ]
   },
   "gates": {
     "minimum_closed_positions": 30,

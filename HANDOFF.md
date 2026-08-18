@@ -1,6 +1,6 @@
 # Polymarket Trading System v1.2.0 — 新对话交接文档
 
-更新时间：2026-08-15（America/New_York）
+更新时间：2026-08-18（America/New_York）
 适用对象：完全没有聊天上下文、需要继续接管项目的下一位开发者或 Codex 代理。
 
 ## 0. 先读这个：真正的仓库在哪里
@@ -25,7 +25,7 @@ origin/main: efac3d15e30983eb7bb8c828753479730ebc0c8c
 working branch: agent/m4-wallet-candidate-audit
 ```
 
-M4.1-A/A2/B 的源码和文档变更位于 `agent/m4-wallet-candidate-audit` 功能分支和 draft PR #1；运行证据位于被 Git 忽略的 `runtime/m2/research/m4/`。发布状态必须用 Git 和 GitHub 重新确认，不能由本交接快照替代。
+M4.1-A/A2/B/C 的源码和文档变更位于 `agent/m4-wallet-candidate-audit` 功能分支和 draft PR #1；运行证据位于被 Git 忽略的 `runtime/m2/research/m4/`。发布状态必须用 Git 和 GitHub 重新确认，不能由本交接快照替代。
 
 当前桌面工作区路径：
 
@@ -53,7 +53,7 @@ git rev-parse HEAD
 
 “越用越聪明”不是允许模型自由改代码、改风险线或给自己打分，而是让每一次改进都经过固定测试、样本外验证、shadow deployment、晋级门槛和回滚控制。时间只有在证据链可靠时才产生复利；自动化一个错误的反馈循环，只会让错误复利。
 
-当前阶段做到 **M3.7 paper execution evidence + M4.1-B offline exact-market peer discovery**。我们已经建立可靠数据、运行基础设施、现实化模拟成交和可审查的同场钱包候选发现，但还没有建立 M4 的预测信号，因此：
+当前阶段做到 **M3.7 paper execution evidence + M4.1-C prospective expert-wallet observation**。我们已经建立可靠数据、运行基础设施、现实化模拟成交、同场钱包发现和独立的前瞻观察时钟，但还没有建立 M4 的预测信号，因此：
 
 - 没有证明 alpha；
 - 没有证明稳定盈利；
@@ -95,7 +95,7 @@ M0–M3 目前主要是在可靠地测量等号右侧的成本和错误，不是
 
 ## 3. 当前系统架构
 
-只有一个正式 macOS 定时任务：
+现在有两个职责隔离的 macOS 定时任务：
 
 ```text
 LaunchAgent: com.williamniu.polymarket-m2
@@ -105,6 +105,15 @@ Interval:    900 seconds（15 分钟，预期 96 次/天）
 Database:    runtime/m2/state.sqlite3
 stdout:      runtime/m2/collector.log
 stderr:      runtime/m2/collector-error.log
+
+LaunchAgent: com.williamniu.polymarket-m4
+Python:      /opt/homebrew/bin/python3.11
+Command:     m4.py tracking-cycle
+Wake:        300 seconds（5 分钟）
+Trades:      900 seconds（15 分钟）
+Evidence:    runtime/m2/research/m4/prospective/evidence.jsonl
+stdout:      runtime/m2/research/m4/prospective/service.log
+stderr:      runtime/m2/research/m4/prospective/service-error.log
 ```
 
 每个周期的调用关系：
@@ -119,14 +128,18 @@ flowchart TD
     DB --> R["持仓生命周期与官方结算"]
     R --> Q["现金/权益/持仓精确对账"]
     Q --> G["状态、失败归因与晋级门槛"]
+    L4["M4 LaunchAgent / 300 seconds"] --> O["五钱包公开成交观察"]
+    O --> E["独立 append-only/hash-chain evidence"]
+    E --> X["可执行报价、延迟、结算；无 signal/order"]
 ```
 
 为什么 `runtime/` 只有 `runtime/m2/`：
 
 - M1 是由 M2 调度的数据采集能力，旧 M1 证据归档在 `runtime/m2/imports/`；
-- M2 是唯一编排器、唯一 writer lock、唯一 LaunchAgent 和唯一运行数据库；
+- M2 是交易运行时的唯一编排器、唯一 SQLite writer lock 和唯一运行数据库；
 - M3 在同一个 M2 周期内运行，probe、订单、成交、持仓、结算和对账都在同一 SQLite；
-- 单独创建 `runtime/m1/`、`runtime/m3/` 或第二个定时器会制造多个事实来源和写入竞争，禁止这样做。
+- M4 的独立 LaunchAgent 只写 `research/m4/prospective/` 的公开研究证据并使用独立文件锁，不打开 SQLite；
+- 单独创建 `runtime/m1/`、`runtime/m3/`、第二个 SQLite writer 或让 M4 写交易账本会制造多个事实来源和写入竞争，禁止这样做。
 
 ## 4. 已经完成的阶段
 
@@ -249,36 +262,51 @@ flowchart TD
 
 最终报告时间为 `2026-08-15T22:43:34.485267Z`：Betwick 的 166 个 material actions 覆盖 31 个种子市场，发现 65 个机械 peer，并对前 20 个补充公开资料。23 个市场触及 10,000 条 API 上限，因此只能证明“看到了什么”，不能用缺失证明“没有发生”。Kekkone 是当前最强的新观察线索；PhilIvey9 的 15 次匹配全部在 Betwick 之后一分钟内、中位延迟 22 秒，只能作为同步跟随对照，不能算独立专家。仍未批准任何专家团队。
 
+### M4.1-C：五钱包前瞻观察
+
+配置 v4 于 `2026-08-18T20:22:28.504513Z` 启动独立 M4 证据时钟：
+
+- Betwick 是 reference，Kekkone 是 primary challenger，Tenebrus7 是 high-activity comparator，JasonPunos 是 identity comparator，PhilIvey9 是 follower control；
+- LaunchAgent 每 5 分钟唤醒，公开钱包成交每 15 分钟抓取一次；
+- 只接受时钟启动后的成交，30 分钟内净额重建同一钱包/精确市场的方向变化，再等待一个采集周期避免把拆单过早定型；
+- 行为成熟时记录我们当时真正可执行的 best bid/ask，5 分钟后再次记录；精确 market、outcome index、token 和 order-book identity 必须一致；
+- 不设最低价格，不设距离到期限制；价格和到期时间只是解释特征；
+- 原始 gzip 批次有 content/file 双哈希，事件日志逐条 hash-chain、fsync，并由独立非阻塞文件锁保护；
+- 至少观察 30 天且每个钱包至少有 30 个已结算 material action 才能进入复核；不足就继续收集，不补造样本；
+- 所有钱包仍为 `not_approved`，没有 signal、paper position、order、credential 或 M2/M3 SQLite 接入。
+
+首个自然 RunAtLoad 周期完整成功，五个数据源均无错误且未触及上限；Tenebrus7 的 19 笔启动前历史成交被正确排除。首个 raw file/content SHA-256 已独立复核。此结论只证明前瞻采集链开始工作，不证明专家、共识或盈利。
+
 ## 5. 交接时的动态快照
 
-以下快照来自 `2026-08-15T21:18:24Z` 左右。系统仍在运行，数字会继续变化；新对话必须用命令刷新，不要把本表当成当前真相。
+以下快照来自 `2026-08-18T20:23:15Z` 左右。系统仍在运行，数字会继续变化；新对话必须用命令刷新，不要把本表当成当前真相。
 
 | 层 | 当前值 | 晋级门槛/状态 |
 |---|---:|---|
-| M1 venue evidence | 1,421 样本，358.791 小时 | 机械门槛完成；Kalshi 质量合格，Polymarket US 顶部名义金额不合格 |
-| M2 runtime evidence | 1,346 合格周期，339.844 小时 | 机械晋级条件满足；待正式审查 |
-| M2 total cycles | 1,421 | 最近周期 1,421，状态正常 |
+| M1 venue evidence | 1,703 样本，429.973 小时 | 机械门槛完成；Kalshi 质量合格，Polymarket US 顶部名义金额不合格 |
+| M2 runtime evidence | 1,628 合格周期，411.026 小时 | 机械晋级条件满足；待正式审查 |
+| M2 total cycles | 1,703 | 最近周期 1,703，状态正常 |
 | M3 active segment | segment 3 / config v3 | 机械晋级条件满足；仍为 collecting，待正式审查 |
-| M3 segment 3 | 1,884 有效 intent，37 失败，243.288 小时 | 每个平台均超过 250，零 reconciliation error |
-| Polymarket US | 943 intent，19 失败 | 最新 probe recorded |
-| Kalshi | 941 intent，18 失败 | 最新 probe recorded |
+| M3 segment 3 | 2,446 有效 intent，38 失败，314.369 小时 | 每个平台均超过 250，零 reconciliation error |
+| Polymarket US | 1,225 intent，19 失败 | 最新 probe recorded |
+| Kalshi | 1,221 intent，19 失败 | 最新 probe recorded |
 | M3 reconciliation errors | 0 | 必须始终为 0 |
 | M3 pending probes | 0 | 正常 |
 | paper account frozen | false | 正常 |
 | SQLite integrity | ok | 正常 |
-| M4.1-B | 65 个机械 peers；Betwick/Kekkone 为观察线索，PhilIvey9 为 follower control | 无专家 cohort、无 prospective tracking、无 signal/position |
+| M4.1-C | config v4；1 个自然 collection；5/5 源完整；0 个时钟后 target trade/action | collecting；无专家 cohort、signal/position/order |
 
 paper 账户的现金、可执行权益和持仓会随自然周期变化，不在交接文档复制陈旧数值；用 `m2.py status` 和权威 SQLite 重新查询。probe 持仓不是策略仓位或 alpha 证明。
 
-M1 还暴露出一个值得观察而不是立即“优化掉”的事实：Polymarket US 的 median top-quote notional 约为 USD 7.778，当前仍未满足选场流动性门槛。不要为了让 gate 变绿就降低标准。
+M1 还暴露出一个值得观察而不是立即“优化掉”的事实：Polymarket US 的 median top-quote notional 约为 USD 7.747，当前仍未满足选场流动性门槛。不要为了让 gate 变绿就降低标准。
 
 ## 6. 当前到底卡在哪里
 
 目前没有已知代码部署 blocker。系统正在正确地被以下证据门槛锁住：
 
 1. M1、M2、M3 的机械时间和样本门槛已经满足，但正式晋级审查尚未完成；Polymarket US 顶部可执行名义金额仍不合格。
-2. M4.1-B 找到了多个同场钱包，但当前只有 Betwick 和 Kekkone 值得优先观察，仍无法证明三个独立、可解释的专家。
-3. 钱包所有权独立性、跟随链、延迟可复制性和前瞻表现都未验证；PhilIvey9 的秒级跟随说明钱包数不能当独立人数。
+2. M4.1-C 刚开始前瞻观察五个候选/对照钱包，30 天与每钱包 30 个已结算 material action 的复核门槛远未成熟。
+3. 钱包所有权独立性、跟随链、延迟可复制性和前瞻表现仍未验证；PhilIvey9 的秒级跟随说明钱包数不能当独立人数。
 4. M4 尚未建立任何经过时间对齐、成本调整和样本外验证的预测 alpha，也未产生交易信号。
 5. 美国地区、未来新加坡等司法辖区、Polymarket US/Kalshi/国际平台的实际账户和合法使用资格仍必须在接近实盘时重新核实。
 6. 远程 alert、实时 Bloomberg 式 dashboard 和随时随地查看界面尚未实现；目前以 CLI、SQLite 和日志为权威。
@@ -298,15 +326,19 @@ git rev-parse HEAD
 git rev-parse origin/main
 ```
 
-预期：`main`，HEAD 与 `origin/main` 一致；本交接提交之后的 hash 可能更新。
+预期：M4 draft PR 合并前是 `agent/m4-wallet-candidate-audit` 并跟踪同名远端分支；合并后才应是 `main`。本交接提交之后的 hash 可能更新。
 
 ### 第二步：只读检查实时状态
 
 ```bash
 /opt/homebrew/bin/python3.11 m2.py status
 launchctl print gui/$(id -u)/com.williamniu.polymarket-m2
+/opt/homebrew/bin/python3.11 m4.py tracking-status
+launchctl print gui/$(id -u)/com.williamniu.polymarket-m4
 tail -n 20 runtime/m2/collector.log
 tail -n 50 runtime/m2/collector-error.log
+tail -n 80 runtime/m2/research/m4/prospective/service.log
+tail -n 50 runtime/m2/research/m4/prospective/service-error.log
 ```
 
 注意：每轮通常只运行约 7 秒，所以 `launchctl` 大部分时间显示 `state = not running` 是正常的。真正要看的是：
@@ -318,6 +350,8 @@ tail -n 50 runtime/m2/collector-error.log
 - M3 各平台的 recorded/failed 是否可解释；
 - reconciliation error 是否仍为 0；
 - paper account 是否冻结。
+- M4 `last collection` 是否新鲜、五个源是否完整、证据链是否可读取；
+- M4 `signal_authorized`、`paper_position_authorized` 和 `order_capability` 是否仍为 false。
 
 ### 第三步：确认代码基线仍通过
 
@@ -331,7 +365,7 @@ tail -n 50 runtime/m2/collector-error.log
 git diff --check
 ```
 
-当前完整基线是 86 项测试通过，其中 M4 有 16 项聚焦测试，覆盖精确市场和时间窗口、无价格/到期筛选、净仓 materiality、同步跟随和双哈希语义。
+当前完整基线是 91 项测试通过，其中 M4 有 21 项聚焦测试，新增覆盖配置冻结、hash chain 损坏、精确 book identity、自然调度配置和“重建后延迟、绝不发 signal”的完整周期。
 
 ### 第四步：根据证据决定“保持不动”还是提案
 
@@ -348,9 +382,9 @@ git diff --check
 3. 机械门槛已达到；下一步做冻结快照和对抗式晋级审查，而不是自动宣布通过。
 4. 任何 evidence-changing 修复都必须：暂停 M3 probe、在线备份、保留并归档旧 segment、修改并测试、新建 segment、重新启用、观察自然周期。
 
-### M4.1-B 已完成；下一步是批准前瞻观察组，而不是宣布专家团队
+### M4.1-C 已启动；下一步是保护前瞻时钟并预注册评分，不是宣布专家团队
 
-M4 才开始回答“凭什么赚钱”。精确同场发现已把候选图扩展到 65 个钱包，但对抗式审查只支持先建立观察组：Betwick 作为已知参考，Kekkone 作为主要 challenger，PhilIvey9 作为 follower negative control；Tenebrus7 和 JasonPunos 可分别作为高活动/身份待查的比较组。开始 M4.1-C 前必须批准具体钱包、采集频率、净仓变化定义、观察后延迟、当时可执行价格、基准和证伪条件。价格与到期时间可以作为解释特征，但不得成为准入门槛。在前瞻证据证明至少三个来源独立且可复制前，不构建共识信号：
+M4 才开始回答“凭什么赚钱”。五钱包观察组、采集频率、30 分钟净额、检测时可执行价格、5 分钟延迟和最低样本门槛已经被冻结并开始运行。现在不能按早期结果换钱包或阈值；应保持服务健康，同时在看到足够结算结果前另行提出并获批 benchmark、费用/容量、相关事件和时间顺序 holdout 的评分规则。在前瞻证据证明来源独立、可复制且扣除成本后优于基准前，不构建共识信号：
 
 1. **专家/钱包行为信号**：研究特定交易者是否在控制存活偏差、入场延迟、仓位重建、可复制价格和费用后仍有增量价值。不能只挑当前排行榜赢家然后回看。
 2. **跨市场相对价值**：比较同一事件在不同合法平台或相关标的中的概率约束，前提是事件定义、结算规则和时间完全对齐。
@@ -598,4 +632,4 @@ M3 紧急停止新 probe：只把 `config/m3.json` 中 `runtime_probe.enabled` �
 
 ## 15. 给下一位代理的一句话
 
-不要急着让系统“交易得更多”；先确保每一条信息从官方事实到决策、模拟成交、账本、结算、对账、失败归因和晋级都没有断链。当前正确动作是保护 M3.7 segment 3 的自然证据，同时冻结并批准 M4.1-C 前瞻观察组；它只能收集和重建专家行为，不能直接生成 paper signal。
+不要急着让系统“交易得更多”；先确保每一条信息从官方事实到决策、模拟成交、账本、结算、对账、失败归因和晋级都没有断链。当前正确动作是保护 M3.7 segment 3 和 M4.1-C config v4 两套自然证据，监测五钱包的可复制性并预注册后续评分；M4.1-C 只能收集和重建候选行为，不能直接生成 paper signal。

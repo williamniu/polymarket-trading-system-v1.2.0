@@ -8,7 +8,7 @@ A paper-only research system designed to become more reliable through measured f
 - **M2 paper infrastructure is deployed and mechanically promotion-eligible.** It remains active while formal review is pending.
 - M2 uses one SQLite source of truth, heartbeats, health checks, alerts, backups, evidence migration, and a $5,000 simulated account baseline.
 - **M3.7 paper shadow execution is connected to the existing M2 service.** Each scheduled cycle runs one-contract public-data probes for both venues, resolves open positions through exact public market endpoints, seals official settlements, and keeps promotion evidence in immutable segments.
-- **M4.1-B exact-market peer discovery is implemented offline.** Starting from Betwick's target-market actions, configuration v3 found 65 mechanical peers for manual review. Kekkone is the strongest new observation lead; PhilIvey9 is a useful synchronous-follower control, not an independent expert. No cohort, signal or runtime integration exists yet.
+- **M4.1-C prospective expert-wallet observation is deployed.** Configuration v4 freezes a five-wallet comparison panel and collects public trades every 15 minutes. It reconstructs 30-minute net directional actions, records the first executable quote available to us and another quote five minutes later, then waits for exact final outcomes. Every wallet remains `not_approved`; no signal, paper position or order exists.
 - M3 probe PnL is execution-friction evidence, and M4 candidates are leads rather than experts. Neither is a profitability claim.
 - There is no credential loading, signing, order submission, deposit, withdrawal, or live-trading code.
 - Market making, latency arbitrage, and maker-rebate capture are prohibited as primary alpha sources.
@@ -61,7 +61,7 @@ See `docs/MENTAL_MODEL.md` for the project knowledge graph and the distinction b
 
 The safe operational stop is `runtime_probe.enabled` in `config/m3.json`. `m3-new-segment` is an approval-gated maintenance command that requires this switch to be disabled and archives the prior counters without rewriting its rows. M3 configuration v3 runs both venues per 15-minute M2 cycle and requires at least 250 valid intents per venue as part of the unchanged 168-hour/600-intent gate. See `docs/USER_DECISIONS.md` for the complete user-editable control surface.
 
-## M4.1-A2/B read-only commands
+## M4.1-A2/B/C public-data commands
 
 ```bash
 /opt/homebrew/bin/python3.11 m4.py check
@@ -69,6 +69,11 @@ The safe operational stop is `runtime_probe.enabled` in `config/m3.json`. `m3-ne
 /opt/homebrew/bin/python3.11 m4.py status
 /opt/homebrew/bin/python3.11 m4.py peers
 /opt/homebrew/bin/python3.11 m4.py peer-status
+/opt/homebrew/bin/python3.11 m4.py tracking-init
+/opt/homebrew/bin/python3.11 m4.py tracking-cycle
+/opt/homebrew/bin/python3.11 m4.py tracking-status
 ```
 
 `audit` reads public leaderboard, trade, closed-position and profile endpoints. `peers` finds wallets acting in the same direction on the exact same `conditionId` within six hours of a reference action. It has no price or time-to-resolution admission gate; the $100 net-directional-notional floor removes dust and offsetting churn and is not a probability-price threshold. Both commands write a compressed source artifact plus separate content and file SHA-256 values under ignored `runtime/m2/research/m4/`; neither opens SQLite. A match means only “candidate for manual observation,” never “independent expert” or “alpha.”
+
+`tracking-init` is a one-time evidence-clock operation; do not run it casually. The deployed `com.williamniu.polymarket-m4` LaunchAgent invokes `tracking-cycle` every five minutes, while wallet trade collection remains every 15 minutes. The separate append-only hash chain is `runtime/m2/research/m4/prospective/evidence.jsonl`, with immutable compressed source captures below `prospective/raw/`. A configuration change after the clock starts fails closed and requires an approved new M4 segment design; it does not modify M2/M3 SQLite. Use `tracking-status` for the current panel counts and review gate.
